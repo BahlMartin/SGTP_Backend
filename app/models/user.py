@@ -185,6 +185,21 @@ class Personal(AbstractBaseUser):
             validar_solo_letras_min2(self.apellidos)
         validar_dni_positivo(self.dni)
 
+    def delete(self, using=None, keep_parents: bool = False):
+        """Borrado lógico: desactiva la cuenta del personal."""
+        self.activo = False
+        self.save(update_fields=['activo'])
+        return 1, {self._meta.label: 1}
+
+    def hard_delete(self, using=None, keep_parents: bool = False):
+        """Eliminación física definitiva de la cuenta."""
+        return super().delete(using=using, keep_parents=keep_parents)
+
+    def restore(self) -> None:
+        """Restaura la cuenta del personal."""
+        self.activo = True
+        self.save(update_fields=['activo'])
+
 
 # ==============================================================================
 # MODELO HABILITACIÓN HORARIA
@@ -227,6 +242,21 @@ class HabilitacionHoraria(models.Model):
             raise ValidationError("Solo una usuaria con rol 'Jefa' o 'Admin' puede autorizar excepciones de turno.")
         if self.hora_inicio and self.hora_fin and self.hora_inicio >= self.hora_fin:
             raise ValidationError("La hora de inicio debe ser estrictamente anterior a la hora de fin.")
+
+    def delete(self, using=None, keep_parents: bool = False):
+        """Borrado lógico: marca la habilitación horaria como inactiva."""
+        self.activa = False
+        self.save(update_fields=['activa'])
+        return 1, {self._meta.label: 1}
+
+    def hard_delete(self, using=None, keep_parents: bool = False):
+        """Eliminación física definitiva de la habilitación."""
+        return super().delete(using=using, keep_parents=keep_parents)
+
+    def restore(self) -> None:
+        """Restaura la habilitación horaria."""
+        self.activa = True
+        self.save(update_fields=['activa'])
 
 
 

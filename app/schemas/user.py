@@ -3,7 +3,7 @@ Serializadores DRF y Esquemas para Autenticación, Gestión de Personal y Turnos
 """
 from typing import Any, Dict
 from rest_framework import serializers
-from app.models.user import Personal, RolPersonal, HabilitacionHoraria
+from app.models.user import Personal, HabilitacionHoraria
 from app.core.validators import validar_solo_letras_min2
 
 
@@ -81,7 +81,7 @@ class PersonalSerializer(serializers.ModelSerializer):
 
 
 class HabilitacionHorariaSerializer(serializers.ModelSerializer):
-    aprobado_por_nombre = serializers.ReadOnlyField(source='aprobado_por.email')
+    aprobado_por_email = serializers.ReadOnlyField(source='aprobado_por.email')
     personal_email = serializers.ReadOnlyField(source='personal.email')
 
     class Meta:
@@ -91,14 +91,14 @@ class HabilitacionHorariaSerializer(serializers.ModelSerializer):
             'personal',
             'personal_email',
             'aprobado_por',
-            'aprobado_por_nombre',
+            'aprobado_por_email',
             'fecha',
             'hora_inicio',
             'hora_fin',
             'motivo',
             'activa',
         ]
-        read_only_fields = ['id', 'aprobado_por', 'aprobado_por_nombre', 'personal_email']
+        read_only_fields = ['id', 'aprobado_por', 'aprobado_por_email', 'personal_email']
 
 
 # Alias arquitectónicos
