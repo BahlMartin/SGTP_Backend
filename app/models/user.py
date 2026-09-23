@@ -2,14 +2,14 @@
 Modelos de Datos para Autenticación, Personal Asistencial y Control de Turnos.
 Auditoría inalterable integrada con django-auditlog.
 """
-from typing import Any, Optional
 import os
-import re
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 from auditlog.registry import auditlog
+
+from app.core.validators import validar_solo_letras_min2, validar_dni_positivo
 
 
 # ==============================================================================
@@ -34,8 +34,8 @@ class PersonalManager(BaseUserManager):
     def create_user(
         self,
         email: str,
-        password: Optional[str] = None,
-        **extra_fields: Any
+        password: str | None = None,
+        **extra_fields
     ) -> 'Personal':
         if not email:
             raise ValueError("El email es un campo obligatorio.")
@@ -52,8 +52,8 @@ class PersonalManager(BaseUserManager):
     def create_superuser(
         self,
         email: str,
-        password: Optional[str] = None,
-        **extra_fields: Any
+        password: str | None = None,
+        **extra_fields
     ) -> 'Personal':
         """
         Crea un usuario administrador asegurando rol Admin y activo=True.
@@ -91,10 +91,12 @@ class Personal(AbstractBaseUser):
     email = models.EmailField(unique=True, verbose_name="Correo Electrónico Institucional")
     nombre = models.CharField(
         max_length=150,
+        validators=[validar_solo_letras_min2],
         verbose_name="Nombre(s)"
     )
     apellidos = models.CharField(
         max_length=150,
+        validators=[validar_solo_letras_min2],
         verbose_name="Apellido(s)"
     )
     dni = models.IntegerField(unique=True, verbose_name="Documento Nacional de Identidad")
@@ -181,8 +183,7 @@ class Personal(AbstractBaseUser):
             validar_solo_letras_min2(self.nombre)
         if self.apellidos:
             validar_solo_letras_min2(self.apellidos)
-        if self.dni is not None and self.dni <= 0:
-            raise ValidationError({'dni': "El DNI debe ser un número entero positivo válido."})
+        validar_dni_positivo(self.dni)
 
 
 # ==============================================================================
@@ -228,21 +229,6 @@ class HabilitacionHoraria(models.Model):
             raise ValidationError("La hora de inicio debe ser estrictamente anterior a la hora de fin.")
 
 
-# ==============================================================================
-# VALIDACIONES DE NEGOCIO Y CAMPOS (UBICADAS DEBAJO DE LOS MODELOS)
-# ==============================================================================
-
-def validar_solo_letras_min2(valor: str) -> None:
-    """Valida que el valor tenga mínimo 2 caracteres y solo contenga letras y espacios."""
-    if not valor or len(str(valor).strip()) < 2:
-        raise ValidationError("Debe contener un mínimo de 2 caracteres.")
-    if not re.match(r'^[a-zA-ZáéíóúÁÉÍÓÚñÑüÜ\s]+$', str(valor).strip()):
-        raise ValidationError("Solo se admiten caracteres alfabéticos y espacios.")
-
-
-# Asignación de validadores de campo sobre el modelo Personal
-Personal._meta.get_field('nombre').validators = [validar_solo_letras_min2]
-Personal._meta.get_field('apellidos').validators = [validar_solo_letras_min2]
 
 
 # ==============================================================================
@@ -262,5 +248,4 @@ __all__ = [
     'Personal',
     'User',
     'HabilitacionHoraria',
-    'validar_solo_letras_min2',
 ]

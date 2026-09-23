@@ -8,7 +8,7 @@ from auditlog.registry import auditlog
 
 from app.models.common import SoftDeleteModel
 from app.core.fields import FernetEncryptedCharField
-from app.models.user import validar_solo_letras_min2
+from app.core.validators import validar_solo_letras_min2, validar_dni_positivo
 
 
 class Paciente(SoftDeleteModel):
@@ -49,8 +49,7 @@ class Paciente(SoftDeleteModel):
 
     def clean(self) -> None:
         super().clean()
-        if self.dni is not None and self.dni <= 0:
-            raise ValidationError({'dni': "El DNI debe ser un número entero positivo válido."})
+        validar_dni_positivo(self.dni)
         if self.nombre:
             validar_solo_letras_min2(str(self.nombre))
         if self.apellidos:

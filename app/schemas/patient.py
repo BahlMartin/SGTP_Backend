@@ -3,7 +3,7 @@ Serializadores DRF y Esquemas para Pacientes y Soporte de Cifrado FLE.
 """
 from rest_framework import serializers
 from app.models.patient import Paciente
-from app.models.user import validar_solo_letras_min2
+from app.core.validators import validar_solo_letras_min2
 
 
 class PacienteSerializer(serializers.ModelSerializer):

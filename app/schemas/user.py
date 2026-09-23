@@ -3,7 +3,8 @@ Serializadores DRF y Esquemas para Autenticación, Gestión de Personal y Turnos
 """
 from typing import Any, Dict
 from rest_framework import serializers
-from app.models.user import Personal, RolPersonal, HabilitacionHoraria, validar_solo_letras_min2
+from app.models.user import Personal, RolPersonal, HabilitacionHoraria
+from app.core.validators import validar_solo_letras_min2
 
 
 class LoginSerializer(serializers.Serializer):
@@ -25,7 +26,6 @@ class PersonalAuthSerializer(serializers.ModelSerializer):
     Serializador específico para respuestas de autenticación (Login).
     Devuelve únicamente la información de sesión requerida para el frontend.
     """
-    apellido = serializers.CharField(source='apellidos', read_only=True)
 
     class Meta:
         model = Personal
@@ -34,10 +34,9 @@ class PersonalAuthSerializer(serializers.ModelSerializer):
             'matricula',
             'nombre',
             'apellidos',
-            'apellido',
             'rol',
             'inicio_turno',
-            'fin_turno',
+            'fin_turno'
         ]
         read_only_fields = fields
 
@@ -59,10 +58,9 @@ class PersonalSerializer(serializers.ModelSerializer):
             'activo',
             'cant_intentos',
             'inicio_turno',
-            'fin_turno',
-            'fecha_creacion',
+            'fin_turno'
         ]
-        read_only_fields = ['id_personal', 'cant_intentos', 'fecha_creacion']
+        read_only_fields = ['id_personal', 'cant_intentos', 'matricula', 'dni']
 
     def validate_nombre(self, value: str) -> str:
         validar_solo_letras_min2(value)
@@ -72,14 +70,14 @@ class PersonalSerializer(serializers.ModelSerializer):
         validar_solo_letras_min2(value)
         return value.strip()
 
-    def validate(self, attrs: Dict[str, Any]) -> Dict[str, Any]:
-        inicio = attrs.get('inicio_turno')
-        fin = attrs.get('fin_turno')
+    def validate(self, attributes: Dict[str, Any]) -> Dict[str, Any]:
+        inicio = attributes.get('inicio_turno')
+        fin = attributes.get('fin_turno')
         if (inicio and not fin) or (fin and not inicio):
             raise serializers.ValidationError(
                 "Debe especificar tanto inicio_turno como fin_turno para definir la franja horaria."
             )
-        return attrs
+        return attributes
 
 
 class HabilitacionHorariaSerializer(serializers.ModelSerializer):

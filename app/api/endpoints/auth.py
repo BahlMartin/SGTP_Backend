@@ -1,7 +1,6 @@
 """
 Controlador de Endpoints para Autenticación, Cierre de Sesión y Desbloqueos de Emergencia.
 """
-from typing import Any
 from django.urls import path
 from django.contrib.auth import login, logout
 from rest_framework import status
@@ -13,7 +12,6 @@ from drf_spectacular.utils import extend_schema
 
 from app.schemas.user import (
     LoginSerializer,
-    PersonalSerializer,
     PersonalAuthSerializer,
     DesbloqueoManualSerializer,
     EmergencyUnlockSerializer,

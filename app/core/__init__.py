@@ -9,6 +9,10 @@ from app.core.security import (
     hash_password,
     verify_password,
 )
+from app.core.validators import (
+    validar_solo_letras_min2,
+    validar_dni_positivo,
+)
 
 __all__ = [
     'settings',
@@ -17,4 +21,6 @@ __all__ = [
     'get_fernet_cipher',
     'hash_password',
     'verify_password',
+    'validar_solo_letras_min2',
+    'validar_dni_positivo',
 ]
