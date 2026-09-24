@@ -26,10 +26,19 @@ def validar_dni_positivo(valor: Optional[int]) -> None:
     Valida que el DNI sea un número entero positivo mayor a cero.
     """
     if valor is not None and valor <= 0:
-        raise ValidationError({'dni': "El DNI debe ser un número entero positivo válido."})
+        raise ValidationError("El DNI debe ser un número entero positivo válido.")
+
+
+def validar_texto(valor: Any, mensaje: Optional[str] = None) -> None:
+    """
+    Valida que el valor no sea nulo ni consista únicamente en espacios en blanco.
+    """
+    if valor is None or not str(valor).strip():
+        raise ValidationError(mensaje or "El texto no puede estar vacío.")
 
 
 __all__ = [
     'validar_solo_letras_min2',
     'validar_dni_positivo',
+    'validar_texto',
 ]

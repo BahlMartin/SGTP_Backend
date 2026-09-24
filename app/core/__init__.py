@@ -12,6 +12,7 @@ from app.core.security import (
 from app.core.validators import (
     validar_solo_letras_min2,
     validar_dni_positivo,
+    validar_texto,
 )
 
 __all__ = [
@@ -23,4 +24,5 @@ __all__ = [
     'verify_password',
     'validar_solo_letras_min2',
     'validar_dni_positivo',
+    'validar_texto',
 ]

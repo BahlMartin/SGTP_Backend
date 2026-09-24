@@ -40,9 +40,9 @@ class EstudiosAdmin(admin.ModelAdmin):
 
 @admin.register(Paciente)
 class PacienteAdmin(admin.ModelAdmin):
-    list_display = ['dni', 'nombre', 'apellidos', 'num_obra_social', 'fecha_creacion', 'is_deleted']
-    search_fields = ['dni']
-    list_filter = ['is_deleted', 'fecha_creacion']
+    list_display = ['dni', 'nombre', 'apellidos', 'obra_social', 'num_obra_social', 'fecha_creacion', 'is_deleted']
+    search_fields = ['dni', 'obra_social']
+    list_filter = ['obra_social', 'is_deleted', 'fecha_creacion']
 
 
 @admin.register(Box)

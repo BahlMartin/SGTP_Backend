@@ -33,6 +33,7 @@ class ReportsServiceTestCase(TestCase):
         )
         self.paciente = Paciente.objects.create(
             dni=45000111,
+            obra_social='OSDE',
             num_obra_social='OSDE-5544',
             nombre='Gonzalo',
             apellidos='Morales'

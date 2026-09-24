@@ -69,18 +69,21 @@ class TriageServiceTestCase(TestCase):
         # Crear pacientes
         self.paciente_1 = Paciente.objects.create(
             dni=10000001,
+            obra_social='OSDE',
             num_obra_social='OS-998877',
             nombre='Juan',
             apellidos='Perez'
         )
         self.paciente_2 = Paciente.objects.create(
             dni=10000002,
+            obra_social='Swiss Medical',
             num_obra_social='OS-112233',
             nombre='Ana',
             apellidos='Garcia'
         )
         self.paciente_3 = Paciente.objects.create(
             dni=10000003,
+            obra_social='Particular',
             num_obra_social='OS-445566',
             nombre='Esteban',
             apellidos='Quito'

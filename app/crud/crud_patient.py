@@ -21,11 +21,12 @@ class CRUDPatient:
         return list(Paciente.objects.filter(is_deleted=False).order_by('-fecha_creacion'))
 
     @staticmethod
-    def create_patient(dni: int, nombre: str, apellidos: str, num_obra_social: str) -> Paciente:
+    def create_patient(dni: int, nombre: str, apellidos: str, num_obra_social: str, obra_social: str = "Particular") -> Paciente:
         return Paciente.objects.create(
             dni=dni,
             nombre=nombre,
             apellidos=apellidos,
+            obra_social=obra_social,
             num_obra_social=num_obra_social
         )
 

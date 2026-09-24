@@ -23,24 +23,29 @@ class PacienteViewSet(viewsets.ModelViewSet):
     serializer_class = PacienteSerializer
     permission_classes = [IsAuthenticated, IsAdmisionOrJefa]
 
-    def get_queryset(self):
-        qs = super().get_queryset()
-        dni = self.request.query_params.get('dni')
-        if dni:
-            qs = qs.filter(dni=dni)
-        return qs
-
     def perform_destroy(self, instance: Paciente) -> None:
         """Aplica borrado lógico en lugar de borrado físico destructivo."""
         instance.delete()
 
-    @action(detail=False, methods=['get'], url_path='buscar-por-dni/(?P<dni>[0-9]+)')
-    def buscar_por_dni(self, request: Request, dni: str = None) -> Response:
-        """Endpoint asistencial directo para verificación de antecedentes en Admisión."""
+    @action(detail=False, methods=['post'], url_path='buscar-por-dni')
+    def buscar_por_dni(self, request: Request) -> Response:
+        """Endpoint asistencial directo para verificación de antecedentes en Admisión vía POST."""
+        dni = request.data.get('dni')
+        if not dni:
+            return Response(
+                {"detail": "El campo 'dni' es requerido en el cuerpo de la solicitud."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         try:
             paciente = Paciente.objects.get(dni=int(dni))
             serializer = self.get_serializer(paciente)
             return Response(serializer.data, status=status.HTTP_200_OK)
+        except (ValueError, TypeError):
+            return Response(
+                {"detail": "El DNI proporcionado debe ser numérico."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         except Paciente.DoesNotExist:
             return Response(
                 {"detail": f"No se encontró ningún paciente registrado con DNI {dni}."},

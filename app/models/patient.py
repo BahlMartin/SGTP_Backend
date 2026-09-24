@@ -8,7 +8,7 @@ from auditlog.registry import auditlog
 
 from app.models.common import SoftDeleteModel
 from app.core.fields import FernetEncryptedCharField
-from app.core.validators import validar_solo_letras_min2, validar_dni_positivo
+from app.core.validators import validar_solo_letras_min2, validar_dni_positivo, validar_texto
 
 
 class Paciente(SoftDeleteModel):
@@ -21,6 +21,10 @@ class Paciente(SoftDeleteModel):
         unique=True,
         db_index=True,
         verbose_name="Documento Nacional de Identidad"
+    )
+    obra_social = models.CharField(
+        max_length=150,
+        verbose_name="Nombre de la Obra Social / Cobertura Médica"
     )
     num_obra_social = FernetEncryptedCharField(
         max_length=512,
@@ -50,13 +54,16 @@ class Paciente(SoftDeleteModel):
     def clean(self) -> None:
         super().clean()
         validar_dni_positivo(self.dni)
+        validar_texto(self.obra_social, "El nombre de la obra social es obligatorio.")
+        if self.obra_social:
+            self.obra_social = self.obra_social.strip()
         if self.nombre:
             validar_solo_letras_min2(str(self.nombre))
         if self.apellidos:
             validar_solo_letras_min2(str(self.apellidos))
 
     def __str__(self) -> str:
-        return f"Paciente DNI: {self.dni} - {self.apellidos}, {self.nombre}"
+        return f"Paciente DNI: {self.dni} - {self.apellidos}, {self.nombre} ({self.obra_social})"
 
 
 # Registro de auditoría

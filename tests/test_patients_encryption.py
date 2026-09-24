@@ -11,6 +11,7 @@ class PatientsFLETestCase(TestCase):
     def setUp(self):
         self.paciente = Paciente.objects.create(
             dni=40123456,
+            obra_social='Swiss Medical',
             num_obra_social='SWISS-889900',
             nombre='Valentina',
             apellidos='Alvarez'
@@ -38,6 +39,7 @@ class PatientsFLETestCase(TestCase):
 
         # A través del ORM de Django se recupera descifrado de manera transparente
         paciente_recuperado = Paciente.objects.get(id_paciente=self.paciente.id_paciente)
+        self.assertEqual(paciente_recuperado.obra_social, 'Swiss Medical')
         self.assertEqual(paciente_recuperado.num_obra_social, 'SWISS-889900')
         self.assertEqual(paciente_recuperado.nombre, 'Valentina')
         self.assertEqual(paciente_recuperado.apellidos, 'Alvarez')
@@ -46,6 +48,7 @@ class PatientsFLETestCase(TestCase):
         """No debe permitir nombres o apellidos con números o símbolos especiales."""
         p_invalido = Paciente(
             dni=40999888,
+            obra_social='OSDE',
             num_obra_social='OS-001',
             nombre='Juan123',
             apellidos='Perez'
@@ -55,6 +58,7 @@ class PatientsFLETestCase(TestCase):
 
         p_invalido_simbolo = Paciente(
             dni=40999889,
+            obra_social='OSDE',
             num_obra_social='OS-002',
             nombre='Juan',
             apellidos='Perez@#$%^'
@@ -66,6 +70,7 @@ class PatientsFLETestCase(TestCase):
         """El nombre y apellido deben tener al menos 2 caracteres alfabéticos."""
         p_corto = Paciente(
             dni=40999890,
+            obra_social='OSDE',
             num_obra_social='OS-003',
             nombre='A',
             apellidos='Perez'
