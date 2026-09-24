@@ -2,7 +2,7 @@
 Serializadores DRF y Esquemas para Catálogo de Estudios Médicos (Items).
 """
 from rest_framework import serializers
-from app.models.item import Estudios
+from app.models.studies import Estudios
 
 
 class EstudiosSerializer(serializers.ModelSerializer):
@@ -12,6 +12,7 @@ class EstudiosSerializer(serializers.ModelSerializer):
             'id',
             'codigo_practica',
             'nombre',
+            'seccion',
             'tipo_muestra',
             'activo',
         ]

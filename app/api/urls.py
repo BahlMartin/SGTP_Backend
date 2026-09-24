@@ -9,7 +9,7 @@ app_name = 'api'
 urlpatterns = [
     path('auth/', include('app.api.endpoints.auth')),
     path('users/', include('app.api.endpoints.users')),
-    path('items/', include('app.api.endpoints.items')),
+    path('studies/', include('app.api.endpoints.studies')),
     path('patients/', include('app.api.endpoints.patients')),
     path('triage/', include('app.api.endpoints.triage')),
     path('reports/', include('app.api.endpoints.reports')),

@@ -10,7 +10,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from rapidfuzz import fuzz
 
-from app.models.item import Estudios
+from app.models.studies import Estudios
 
 logger = logging.getLogger(__name__)
 

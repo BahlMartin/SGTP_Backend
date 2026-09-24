@@ -33,8 +33,8 @@ class HabilitacionHorariaAdmin(admin.ModelAdmin):
 
 @admin.register(Estudios)
 class EstudiosAdmin(admin.ModelAdmin):
-    list_display = ['codigo_practica', 'nombre', 'tipo_muestra', 'activo']
-    list_filter = ['tipo_muestra', 'activo']
+    list_display = ['codigo_practica', 'nombre', 'seccion', 'tipo_muestra', 'activo']
+    list_filter = ['seccion', 'tipo_muestra', 'activo']
     search_fields = ['codigo_practica', 'nombre']
 
 

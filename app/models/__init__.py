@@ -4,7 +4,7 @@ Centraliza las entidades del sistema: Usuarios, Items (Estudios), Pacientes, Tri
 """
 from app.models.common import SoftDeleteModel
 from app.models.user import Personal, User, RolPersonal, HabilitacionHoraria
-from app.models.item import Estudios, Item, CatalogItem, TipoMuestra
+from app.models.studies import Estudios, Item, CatalogItem, TipoMuestra, Seccion, SeccionEstudio
 from app.models.patient import Paciente
 from app.models.triage import (
     Box,
@@ -27,6 +27,8 @@ __all__ = [
     'Item',
     'CatalogItem',
     'TipoMuestra',
+    'Seccion',
+    'SeccionEstudio',
     'Paciente',
     'Box',
     'Ticket',

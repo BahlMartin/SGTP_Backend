@@ -11,7 +11,7 @@ from app.models.triage import (
     ClasificacionTriage,
     MotivoCierreBox,
 )
-from app.schemas.item import EstudiosSerializer
+from app.schemas.studies import EstudiosSerializer
 from app.schemas.patient import PacienteSerializer
 
 

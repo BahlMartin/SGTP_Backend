@@ -11,7 +11,7 @@ from auditlog.registry import auditlog
 from app.models.common import SoftDeleteModel
 from app.models.user import Personal
 from app.models.patient import Paciente
-from app.models.item import Estudios
+from app.models.studies import Estudios
 
 
 class EstadoBox(models.TextChoices):

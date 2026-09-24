@@ -4,7 +4,7 @@ Tests de Integración OCR y Fuzzy Matching Léxico con RapidFuzz.
 import io
 from unittest.mock import patch, MagicMock
 from django.test import TestCase
-from app.models.item import Estudios, TipoMuestra
+from app.models.studies import Estudios, TipoMuestra
 from app.services.ocr_service import OCRIntegrationService
 
 

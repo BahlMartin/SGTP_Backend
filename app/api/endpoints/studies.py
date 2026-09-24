@@ -1,13 +1,13 @@
 """
-Controlador de Endpoints para Catálogo de Estudios Médicos (Items).
+Controlador de Endpoints para Catálogo de Estudios Médicos (Studies).
 """
 from django.urls import path, include
 from rest_framework import viewsets, filters
 from rest_framework.routers import DefaultRouter
 from rest_framework.permissions import IsAuthenticated
 
-from app.models.item import Estudios
-from app.schemas.item import EstudiosSerializer
+from app.models.studies import Estudios
+from app.schemas.studies import EstudiosSerializer
 
 
 class EstudiosViewSet(viewsets.ModelViewSet):
@@ -22,10 +22,10 @@ class EstudiosViewSet(viewsets.ModelViewSet):
     search_fields = ['codigo_practica', 'nombre']
 
 
-app_name = 'items_endpoints'
+app_name = 'studies_endpoints'
 
 router = DefaultRouter()
-router.register(r'', EstudiosViewSet, basename='items')
+router.register(r'', EstudiosViewSet, basename='studies')
 
 urlpatterns = [
     path('', include(router.urls)),

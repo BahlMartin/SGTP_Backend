@@ -12,7 +12,7 @@ from app.schemas.user import (
     HabilitacionHorariaSerializer,
 )
 
-from app.schemas.item import EstudiosSerializer, ItemSchema, CatalogItemSchema
+from app.schemas.studies import EstudiosSerializer, ItemSchema, CatalogItemSchema
 from app.schemas.patient import PacienteSerializer, PatientSchema
 from app.schemas.triage import (
     BoxSerializer,

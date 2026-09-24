@@ -6,12 +6,36 @@ from auditlog.registry import auditlog
 
 
 class TipoMuestra(models.TextChoices):
-    SANGRE = 'Sangre', 'Muestra Sanguínea'
-    ORINA = 'Orina', 'Muestra de Orina'
-    HISOPADO = 'Hisopado', 'Hisopado Nasofaríngeo / Fauces'
-    LCR = 'LCR', 'Líquido Cefalorraquídeo'
-    MATERIA_FECAL = 'Materia Fecal', 'Materia Fecal'
-    OTRO = 'Otro', 'Otro Tipo de Muestra'
+    EDTA = 'edta', 'EDTA'
+    CITRATO = 'citrato', 'Citrato'
+    ORINA = 'orina', 'Orina'
+    MATERIA_FECAL = 'materia fecal', 'Materia Fecal'
+    JERINGA = 'jeringa', 'Jeringa'
+    SUERO = 'suero', 'Suero'
+    OTRO = 'otro', 'Otro'
+
+
+# Retrocompatibilidad de atributos
+TipoMuestra.SANGRE = TipoMuestra.EDTA
+
+
+class Seccion(models.TextChoices):
+    BACTEREOLOGIA = 'Bactereologia', 'Bactereología'
+    QUIMICA = 'quimica', 'Química'
+    IAC = 'IAC', 'IAC'
+    ENDOCRINOLOGIA = 'Endocrinologia', 'Endocrinología'
+    MARCADORES_ONCOLOGICOS = 'Marcadores oncologicos', 'Marcadores Oncológicos'
+    SEROLOGIA = 'serologia', 'Serología'
+    VARIOS = 'varios', 'Varios'
+    ORINA = 'orina', 'Orina'
+    HEMATOLOGIA = 'hematologia', 'Hematología'
+    PARASITOLOGIA = 'parasitologia', 'Parasitología'
+    DETERMINACIONES_ESPECIALES = 'determinaciones especiales', 'Determinaciones Especiales'
+    TOXICOLOGIA = 'toxicologia', 'Toxicología'
+
+
+# Alias para la sección
+SeccionEstudio = Seccion
 
 
 class Estudios(models.Model):
@@ -28,12 +52,18 @@ class Estudios(models.Model):
     nombre = models.CharField(
         max_length=255,
         db_index=True,
-        verbose_name="Nombre / Descripción del Estudio"
+        verbose_name="Nombre  del Estudio"
+    )
+    seccion = models.CharField(
+        max_length=50,
+        choices=Seccion.choices,
+        default=Seccion.VARIOS,
+        verbose_name="Sección del Estudio"
     )
     tipo_muestra = models.CharField(
         max_length=50,
         choices=TipoMuestra.choices,
-        default=TipoMuestra.SANGRE,
+        default=TipoMuestra.OTRO,
         verbose_name="Tipo de Muestra Requerida"
     )
     activo = models.BooleanField(
@@ -60,6 +90,8 @@ auditlog.register(Estudios)
 
 __all__ = [
     'TipoMuestra',
+    'Seccion',
+    'SeccionEstudio',
     'Estudios',
     'Item',
     'CatalogItem',

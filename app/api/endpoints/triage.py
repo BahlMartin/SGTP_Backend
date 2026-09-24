@@ -19,7 +19,7 @@ from app.models.triage import (
     EstadoTicket,
     EstadoBox,
 )
-from app.models.item import Estudios
+from app.models.studies import Estudios
 from app.schemas.triage import (
     BoxSerializer,
     TicketCreateSerializer,

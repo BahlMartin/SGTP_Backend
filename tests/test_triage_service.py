@@ -8,7 +8,7 @@ from django.core.exceptions import ValidationError, PermissionDenied
 
 from app.models.user import Personal, RolPersonal
 from app.models.patient import Paciente
-from app.models.item import Estudios, TipoMuestra
+from app.models.studies import Estudios, TipoMuestra
 from app.models.triage import (
     Box,
     Ticket,

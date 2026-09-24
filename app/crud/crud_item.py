@@ -2,7 +2,7 @@
 Operaciones CRUD para Catálogo de Estudios Médicos (Items).
 """
 from typing import Optional, List
-from app.models.item import Estudios
+from app.models.studies import Estudios
 
 
 class CRUDItem:
