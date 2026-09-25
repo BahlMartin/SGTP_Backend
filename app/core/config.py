@@ -15,11 +15,6 @@ env_file = BASE_DIR / '.env'
 
 if env_file.exists():
     environ.Env.read_env(str(env_file))
-else:
-    raise ImproperlyConfigured(
-        f"CRITICAL ERROR: El archivo de configuración .env es obligatorio y no fue hallado en {BASE_DIR}. "
-        "Verifique la plantilla .env.example."
-    )
 
 
 class Settings:
