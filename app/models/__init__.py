@@ -6,14 +6,17 @@ from app.models.common import SoftDeleteModel
 from app.models.user import Personal, User, RolPersonal, HabilitacionHoraria
 from app.models.studies import Estudios, Item, CatalogItem, TipoMuestra, Seccion, SeccionEstudio
 from app.models.patient import Paciente
-from app.models.triage import (
+from app.models.box import (
     Box,
-    Ticket,
     AsignacionesBox,
     EstadoBox,
+    MotivoCierreBox,
+)
+from app.models.ticket import (
+    Ticket,
+    TicketEstudios,
     EstadoTicket,
     ClasificacionTriage,
-    MotivoCierreBox,
 )
 from app.models.report import HistorialReporteDiario
 

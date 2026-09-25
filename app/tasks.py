@@ -4,7 +4,7 @@ Programada para ejecutarse a las 23:59 UTC mediante Celery Beat.
 """
 import logging
 from celery import shared_task
-from app.services.reports_service import ReportService
+from app.services.reports.report_facade import ReportFacade
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ def tarea_consolidar_y_enviar_reporte_diario(self) -> str:
     """
     logger.info("Iniciando tarea programada Celery: Consolidación y despacho de reporte diario.")
     try:
-        historial = ReportService.enviar_reporte_diario_por_email()
+        historial = ReportFacade.enviar_reporte_diario_por_email()
         resultado = (
             f"Reporte diario procesado con éxito (ID: {historial.id}). "
             f"Atendidos: {historial.total_pacientes_atendidos}. "

@@ -13,6 +13,7 @@ from app.core.validators import (
     validar_solo_letras_min2,
     validar_dni_positivo,
     validar_texto,
+    validar_formato_fecha,
 )
 
 __all__ = [
@@ -25,4 +26,5 @@ __all__ = [
     'validar_solo_letras_min2',
     'validar_dni_positivo',
     'validar_texto',
+    'validar_formato_fecha',
 ]

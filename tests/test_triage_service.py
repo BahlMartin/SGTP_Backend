@@ -9,17 +9,20 @@ from django.core.exceptions import ValidationError, PermissionDenied
 from app.models.user import Personal, RolPersonal
 from app.models.patient import Paciente
 from app.models.studies import Estudios, TipoMuestra
-from app.models.triage import (
+from app.models.box import (
     Box,
-    Ticket,
-    TicketEstudios,
     AsignacionesBox,
     EstadoBox,
-    EstadoTicket,
-    ClasificacionTriage,
     MotivoCierreBox,
 )
-from app.services.triage_service import TriageService, TicketService
+from app.models.ticket import (
+    Ticket,
+    TicketEstudios,
+    EstadoTicket,
+    ClasificacionTriage,
+)
+from app.services.triage_service import TriageService
+from app.services.ticket_service import TicketService
 
 
 class TriageServiceTestCase(TestCase):

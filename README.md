@@ -279,8 +279,9 @@ Todos los endpoints de la aplicación se agrupan bajo el prefijo `/app/`:
 | `/app/auth/` | **Autenticación** | Inicio de sesión, cierre de sesión y gestión de sesiones asistenciales. |
 | `/app/users/` | **Usuarios y Turnos** | Gestión de personal, roles asistenciales y asignación de franjas horarias. |
 | `/app/patients/` | **Pacientes** | Registro y consulta de pacientes con protección criptográfica FLE. |
-| `/app/triage/` | **Triage y Flujo** | Emisión de tickets, priorización, asignación de boxes y transiciones de estado. |
-| `/app/items/` | **Catálogo de Estudios** | Catálogo de análisis clínicos, tipos de muestra y tiempos de procesamiento. |
+| `/app/tickets/` | **Tickets y Espera** | Emisión de tickets en admisión, cola priorizada por triage y borrado lógico. |
+| `/app/boxes/` | **Boxes y Atención** | Llamado de pacientes (algoritmo multibox), cierre de atención y pantallas de sala. |
+| `/app/studies/` | **Catálogo de Estudios** | Catálogo de análisis clínicos, tipos de muestra y tiempos de procesamiento. |
 | `/app/ocr/` | **Procesamiento OCR** | Recepción de órdenes médicas escaneadas y extracción difusa de prácticas. |
 | `/app/reports/` | **Reportes Asistenciales**| Generación manual y consulta del historial de reportes diarios consolidados en PDF. |
 

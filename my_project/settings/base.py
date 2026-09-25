@@ -15,11 +15,11 @@ env_file = BASE_DIR / '.env'
 
 if env_file.exists():
     environ.Env.read_env(str(env_file))
-else:
-    # Fail-Fast si no existe el archivo .env
+elif not os.environ.get('DJANGO_SECRET_KEY'):
+    # Fail-Fast si no existe el archivo .env ni variables de entorno cargadas
     raise ImproperlyConfigured(
-        f"CRITICAL ERROR: El archivo de configuración .env es obligatorio y no fue hallado en {BASE_DIR}. "
-        "Verifique la plantilla .env.example."
+        f"CRITICAL ERROR: No se encontró el archivo .env en {BASE_DIR} ni variables de entorno configuradas. "
+        "Verifique la plantilla .env.example o configure las variables en el dashboard de despliegue."
     )
 
 # ==============================================================================
@@ -81,6 +81,7 @@ MIDDLEWARE = [
     'app.middlewares.logging.RequestLoggingMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'app.middlewares.security.JWEDecryptionMiddleware',
@@ -152,8 +153,17 @@ USE_TZ = True
 # ==============================================================================
 # 7. ARCHIVOS ESTÁTICOS
 # ==============================================================================
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 

@@ -100,7 +100,7 @@ classDiagram
 
 ---
 
-### 3.3. Módulo de Triage y Box (`app/models/triage.py`)
+### 3.3. Módulos de Tickets y Boxes (`app/models/ticket.py` y `app/models/box.py`)
 
 #### `Ticket(SoftDeleteModel)`
 * **Herencia:** [`SoftDeleteModel`](file:///c:/Users/LENOVO%20i5/Desktop/SGTP/SGTP%20Backend/app/models/common.py#L42) ➔ `models.Model`.
@@ -187,9 +187,9 @@ classDiagram
 | Enumeración | Archivo | Valores principales |
 | :--- | :--- | :--- |
 | **`RolPersonal`** | `user.py` | `Admin`, `Jefa`, `Admision`, `Box`, `Secretaria` |
-| **`EstadoTicket`** | `triage.py` | `Esperando Llamado`, `En Atencion`, `Atendido`, `Cancelado` |
-| **`ClasificacionTriage`** | `triage.py` | `Guardia`, `Medicos`, `discapacidad`, `Oncologia`, `Extraccion con Turno`, `Extraccion sin Turno`, `Otro` |
-| **`EstadoBox`** | `triage.py` | `Libre`, `Ocupado`, `Inactivo` |
-| **`MotivoCierreBox`** | `triage.py` | `Finalizado`, `Derivado`, `Cancelado`, `Reasignado` |
+| **`EstadoTicket`** | `ticket.py` | `Esperando Llamado`, `En Atencion`, `Atendido`, `Cancelado` |
+| **`ClasificacionTriage`** | `ticket.py` | `Guardia`, `Medicos`, `discapacidad`, `Oncologia`, `Extraccion con Turno`, `Extraccion sin Turno`, `Otro` |
+| **`EstadoBox`** | `box.py` | `Libre`, `Ocupado`, `Inactivo` |
+| **`MotivoCierreBox`** | `box.py` | `Finalizado`, `Derivado`, `Cancelado`, `Reasignado` |
 | **`TipoMuestra`** | `studies.py` | `edta` *(sangre)*, `citrato`, `heparina`, `orina`, `suero`, `otro` |
 | **`Seccion`** | `studies.py` | `Hematología`, `Química`, `Serología`, `Orina`, `Bactereología`, `Toxicología`, etc. |

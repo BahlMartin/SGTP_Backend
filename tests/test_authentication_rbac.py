@@ -183,7 +183,7 @@ class AuthenticationRBACTestCase(TestCase):
             fin_turno=time(4, 0)
         )
 
-        request = self.factory.get('/app/triage/boxes/')
+        request = self.factory.get('/app/boxes/')
         request.user = usuario_turno
 
         # Si la hora actual del test está fuera de 02:00 a 04:00

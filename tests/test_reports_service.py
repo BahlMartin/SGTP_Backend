@@ -8,8 +8,9 @@ from django.core import mail
 
 from app.models.user import Personal, RolPersonal
 from app.models.patient import Paciente
-from app.models.triage import Box, Ticket, AsignacionesBox, ClasificacionTriage, EstadoTicket
-from app.services.reports_service import ReportService
+from app.models.box import Box, AsignacionesBox
+from app.models.ticket import Ticket, ClasificacionTriage, EstadoTicket
+from app.services.reports.report_facade import ReportFacade, ReportService
 from app.models.report import HistorialReporteDiario
 
 
@@ -89,3 +90,47 @@ class ReportsServiceTestCase(TestCase):
         self.assertIn('secretaria@hospital.local', email_enviado.to)
         self.assertEqual(len(email_enviado.attachments), 1)
         self.assertTrue(email_enviado.attachments[0][0].endswith('.pdf'))
+
+    def test_validador_formato_fecha_unitario(self):
+        """Valida que validar_formato_fecha maneje fechas válidas, nulas y formatos erróneos."""
+        from datetime import date
+        from rest_framework.exceptions import ValidationError as DRFValidationError
+        from app.core.validators import validar_formato_fecha
+
+        # Nulos o vacíos retornan None
+        self.assertIsNone(validar_formato_fecha(None))
+        self.assertIsNone(validar_formato_fecha(""))
+        self.assertIsNone(validar_formato_fecha("   "))
+
+        # Cadena válida
+        self.assertEqual(validar_formato_fecha("2026-09-25"), date(2026, 9, 25))
+
+        # Objeto date previo
+        hoy = date.today()
+        self.assertEqual(validar_formato_fecha(hoy), hoy)
+
+        # Formato inválido lanza DRFValidationError con FECHA_INVALIDA
+        with self.assertRaises(DRFValidationError) as ctx:
+            validar_formato_fecha("25-09-2026")
+        self.assertIn("FECHA_INVALIDA", str(ctx.exception))
+
+    def test_endpoints_reportes_con_fecha_invalida(self):
+        """Verifica que los endpoints de reportes respondan 400 con FECHA_INVALIDA ante fechas incorrectas."""
+        from rest_framework.test import APIClient
+        client = APIClient()
+        client.force_authenticate(user=self.jefa)
+
+        # 1. Metricas diarias
+        res_metricas = client.get('/app/reports/metricas-diarias/?fecha=fecha-erronea')
+        self.assertEqual(res_metricas.status_code, 400)
+        self.assertEqual(res_metricas.data.get('error'), 'FECHA_INVALIDA')
+
+        # 2. Descargar PDF
+        res_pdf = client.get('/app/reports/descargar-pdf/?fecha=fecha-erronea')
+        self.assertEqual(res_pdf.status_code, 400)
+        self.assertEqual(res_pdf.data.get('error'), 'FECHA_INVALIDA')
+
+        # 3. Disparar envío
+        res_envio = client.post('/app/reports/disparar-envio/', {'fecha': 'fecha-erronea'}, format='json')
+        self.assertEqual(res_envio.status_code, 400)
+        self.assertEqual(res_envio.data.get('error'), 'FECHA_INVALIDA')

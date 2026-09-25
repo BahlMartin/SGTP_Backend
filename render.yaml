@@ -1,0 +1,104 @@
+services:
+  # 1. Django Web Service (API REST)
+  - type: web
+    name: sgtp-backend
+    runtime: python
+    region: oregon
+    plan: free
+    buildCommand: "./build.sh"
+    startCommand: "gunicorn my_project.wsgi:application"
+    envVars:
+      - key: DJANGO_DEBUG
+        value: "False"
+      - key: DJANGO_ALLOWED_HOSTS
+        value: "localhost,127.0.0.1,.onrender.com"
+      - key: DB_SSL_MODE
+        value: "require"
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false
+      - key: FERNET_ENCRYPTION_KEY
+        sync: false
+      - key: JWE_SECRET_KEY
+        sync: false
+      - key: EMERGENCY_UNLOCK_SECRET_TOKEN
+        sync: false
+      - key: OCR_SERVICE_URL
+        sync: false
+      - key: DJANGO_CORS_ALLOWED_ORIGINS
+        sync: false
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: redis
+          name: sgtp-redis
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          type: redis
+          name: sgtp-redis
+          property: connectionString
+
+  # 2. Celery Worker (Tareas en segundo plano)
+  - type: worker
+    name: sgtp-celery-worker
+    runtime: python
+    region: oregon
+    plan: starter
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "celery -A my_project worker --loglevel=info"
+    envVars:
+      - key: DJANGO_DEBUG
+        value: "False"
+      - key: DJANGO_ALLOWED_HOSTS
+        value: "localhost,127.0.0.1,.onrender.com"
+      - key: DB_SSL_MODE
+        value: "require"
+      - key: DJANGO_SECRET_KEY
+        fromService:
+          type: web
+          name: sgtp-backend
+          envVarKey: DJANGO_SECRET_KEY
+      - key: DATABASE_URL
+        fromService:
+          type: web
+          name: sgtp-backend
+          envVarKey: DATABASE_URL
+      - key: FERNET_ENCRYPTION_KEY
+        fromService:
+          type: web
+          name: sgtp-backend
+          envVarKey: FERNET_ENCRYPTION_KEY
+      - key: JWE_SECRET_KEY
+        fromService:
+          type: web
+          name: sgtp-backend
+          envVarKey: JWE_SECRET_KEY
+      - key: EMERGENCY_UNLOCK_SECRET_TOKEN
+        fromService:
+          type: web
+          name: sgtp-backend
+          envVarKey: EMERGENCY_UNLOCK_SECRET_TOKEN
+      - key: OCR_SERVICE_URL
+        fromService:
+          type: web
+          name: sgtp-backend
+          envVarKey: OCR_SERVICE_URL
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: redis
+          name: sgtp-redis
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          type: redis
+          name: sgtp-redis
+          property: connectionString
+
+  # 3. Redis Instance (Broker para Celery)
+  - type: redis
+    name: sgtp-redis
+    region: oregon
+    plan: starter
+    maxmemoryPolicy: noeviction
+    ipAllowList: []
