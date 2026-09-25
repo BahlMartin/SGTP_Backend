@@ -1,30 +1,16 @@
 """
-Serializadores DRF y Esquemas para Boxes, Tickets, Asignaciones y Estudios Asociados.
+Serializadores DRF y Esquemas para Tickets Asistenciales y Estudios Asociados.
 """
-from typing import Any, Dict, List
+from typing import Any, Dict
 from rest_framework import serializers
-from app.models.triage import (
-    Box,
+
+from app.models.ticket import (
     Ticket,
     TicketEstudios,
-    AsignacionesBox,
     ClasificacionTriage,
-    MotivoCierreBox,
 )
 from app.schemas.studies import EstudiosSerializer
 from app.schemas.patient import PacienteSerializer
-
-
-class BoxSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Box
-        fields = [
-            'id',
-            'numero',
-            'estado',
-            'activo',
-            'discapacidad',
-        ]
 
 
 class TicketEstudiosSerializer(serializers.ModelSerializer):
@@ -110,43 +96,12 @@ class TicketDetailSerializer(serializers.ModelSerializer):
         return ""
 
 
-class AsignacionesBoxSerializer(serializers.ModelSerializer):
-    box_numero = serializers.ReadOnlyField(source='box.numero')
-    personal_nombre = serializers.ReadOnlyField(source='personal.email')
-    ticket_totem = serializers.ReadOnlyField(source='ticket.num_totem')
-
-    class Meta:
-        model = AsignacionesBox
-        fields = [
-            'id',
-            'box',
-            'box_numero',
-            'personal',
-            'personal_nombre',
-            'ticket',
-            'ticket_totem',
-            'motivo_cierre',
-            'fecha_hora_inicio',
-            'fecha_hora_final',
-        ]
-
-
-class CerrarAtencionSerializer(serializers.Serializer):
-    motivo_cierre = serializers.ChoiceField(
-        choices=MotivoCierreBox.choices,
-        default=MotivoCierreBox.FINALIZADO
-    )
-
-
 # Alias
 TicketSerializer = TicketDetailSerializer
 
 __all__ = [
-    'BoxSerializer',
     'TicketEstudiosSerializer',
     'TicketCreateSerializer',
     'TicketDetailSerializer',
     'TicketSerializer',
-    'AsignacionesBoxSerializer',
-    'CerrarAtencionSerializer',
 ]

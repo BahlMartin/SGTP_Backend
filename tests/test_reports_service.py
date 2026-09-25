@@ -8,7 +8,8 @@ from django.core import mail
 
 from app.models.user import Personal, RolPersonal
 from app.models.patient import Paciente
-from app.models.triage import Box, Ticket, AsignacionesBox, ClasificacionTriage, EstadoTicket
+from app.models.box import Box, AsignacionesBox
+from app.models.ticket import Ticket, ClasificacionTriage, EstadoTicket
 from app.services.reports_service import ReportService
 from app.models.report import HistorialReporteDiario
 

@@ -17,7 +17,8 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 from app.models.user import Personal, RolPersonal
-from app.models.triage import Ticket, AsignacionesBox, TicketEstudios, EstadoTicket
+from app.models.box import AsignacionesBox
+from app.models.ticket import Ticket, TicketEstudios, EstadoTicket
 from app.models.report import HistorialReporteDiario
 
 logger = logging.getLogger(__name__)

@@ -14,13 +14,15 @@ from app.schemas.user import (
 
 from app.schemas.studies import EstudiosSerializer, ItemSchema, CatalogItemSchema
 from app.schemas.patient import PacienteSerializer, PatientSchema
-from app.schemas.triage import (
+from app.schemas.box import (
     BoxSerializer,
+    AsignacionesBoxSerializer,
+    CerrarAtencionSerializer,
+)
+from app.schemas.ticket import (
     TicketEstudiosSerializer,
     TicketCreateSerializer,
     TicketDetailSerializer,
-    AsignacionesBoxSerializer,
-    CerrarAtencionSerializer,
 )
 from app.schemas.report import HistorialReporteDiarioSerializer, ReportSchema
 from app.schemas.ocr import OCRScanRequestSerializer, OCRScanResponseSerializer

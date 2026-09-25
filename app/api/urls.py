@@ -11,7 +11,8 @@ urlpatterns = [
     path('users/', include('app.api.endpoints.users')),
     path('studies/', include('app.api.endpoints.studies')),
     path('patients/', include('app.api.endpoints.patients')),
-    path('triage/', include('app.api.endpoints.triage')),
+    path('tickets/', include('app.api.endpoints.tickets')),
+    path('boxes/', include('app.api.endpoints.boxes')),
     path('reports/', include('app.api.endpoints.reports')),
     path('ocr/', include('app.api.endpoints.ocr')),
 ]
