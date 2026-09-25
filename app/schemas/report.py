@@ -20,10 +20,15 @@ class HistorialReporteDiarioSerializer(serializers.ModelSerializer):
         ]
 
 
+class DispararReporteRequestSerializer(serializers.Serializer):
+    fecha = serializers.DateField(required=False, help_text="Fecha opcional YYYY-MM-DD")
+
+
 # Alias
 ReportSchema = HistorialReporteDiarioSerializer
 
 __all__ = [
     'HistorialReporteDiarioSerializer',
+    'DispararReporteRequestSerializer',
     'ReportSchema',
 ]

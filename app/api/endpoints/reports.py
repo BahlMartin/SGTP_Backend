@@ -1,10 +1,9 @@
 """
 Controlador de Endpoints para Reportes Diarios, Métricas y Descarga de PDF.
 """
-from datetime import datetime
 from django.http import HttpResponse
 from django.urls import path, include
-from rest_framework import viewsets, status, serializers
+from rest_framework import viewsets, status
 from rest_framework.views import APIView
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -13,9 +12,16 @@ from rest_framework.permissions import IsAuthenticated
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 
 from app.models.report import HistorialReporteDiario
-from app.schemas.report import HistorialReporteDiarioSerializer
-from app.services.reports_service import ReportService
+from app.schemas.report import HistorialReporteDiarioSerializer, DispararReporteRequestSerializer
+from app.services.reports.report_facade import ReportFacade
 from app.core.permissions import IsSecretariaOrJefa, IsJefaRole
+from app.core.validators import validar_formato_fecha
+
+PARAMETRO_FECHA_CONSULTA = OpenApiParameter(
+    'fecha',
+    str,
+    description='Fecha a consultar en formato YYYY-MM-DD'
+)
 
 
 class MetricasDiariasView(APIView):
@@ -26,24 +32,12 @@ class MetricasDiariasView(APIView):
     permission_classes = [IsAuthenticated, IsSecretariaOrJefa]
 
     @extend_schema(
-        parameters=[
-            OpenApiParameter('fecha', str, description='Fecha a consultar en formato YYYY-MM-DD')
-        ],
+        parameters=[PARAMETRO_FECHA_CONSULTA],
         responses={200: dict}
     )
     def get(self, request: Request) -> Response:
-        fecha_str = request.query_params.get('fecha')
-        fecha = None
-        if fecha_str:
-            try:
-                fecha = datetime.strptime(fecha_str, '%Y-%m-%d').date()
-            except ValueError:
-                return Response(
-                    {"error": "FECHA_INVALIDA", "detail": "Formato de fecha inválido. Utilice YYYY-MM-DD."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-        metricas = ReportService.consolidar_metricas_diarias(fecha)
+        fecha = validar_formato_fecha(request.query_params.get('fecha'))
+        metricas = ReportFacade.consolidar_metricas_diarias(fecha)
         return Response(metricas, status=status.HTTP_200_OK)
 
 
@@ -54,33 +48,17 @@ class DescargarReportePdfView(APIView):
     permission_classes = [IsAuthenticated, IsSecretariaOrJefa]
 
     @extend_schema(
-        parameters=[
-            OpenApiParameter('fecha', str, description='Fecha a consultar en formato YYYY-MM-DD')
-        ],
+        parameters=[PARAMETRO_FECHA_CONSULTA],
         responses={(200, 'application/pdf'): bytes}
     )
     def get(self, request: Request) -> HttpResponse:
-        fecha_str = request.query_params.get('fecha')
-        fecha = None
-        if fecha_str:
-            try:
-                fecha = datetime.strptime(fecha_str, '%Y-%m-%d').date()
-            except ValueError:
-                return Response(
-                    {"error": "FECHA_INVALIDA", "detail": "Formato de fecha inválido. Utilice YYYY-MM-DD."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-        metricas = ReportService.consolidar_metricas_diarias(fecha)
-        pdf_bytes = ReportService.generar_pdf_reporte(metricas)
+        fecha = validar_formato_fecha(request.query_params.get('fecha'))
+        metricas = ReportFacade.consolidar_metricas_diarias(fecha)
+        pdf_bytes = ReportFacade.generar_pdf_reporte(metricas)
 
         response = HttpResponse(pdf_bytes, content_type='application/pdf')
         response['Content-Disposition'] = f'attachment; filename="Reporte_Asistencial_{metricas["fecha"]}.pdf"'
         return response
-
-
-class DispararReporteRequestSerializer(serializers.Serializer):
-    fecha = serializers.DateField(required=False, help_text="Fecha opcional YYYY-MM-DD")
 
 
 class DispararEnvioReporteView(APIView):
@@ -93,18 +71,8 @@ class DispararEnvioReporteView(APIView):
 
     @extend_schema(request=DispararReporteRequestSerializer, responses={200: HistorialReporteDiarioSerializer})
     def post(self, request: Request) -> Response:
-        fecha_str = request.data.get('fecha')
-        fecha = None
-        if fecha_str:
-            try:
-                fecha = datetime.strptime(fecha_str, '%Y-%m-%d').date()
-            except ValueError:
-                return Response(
-                    {"error": "FECHA_INVALIDA", "detail": "Formato de fecha inválido. Utilice YYYY-MM-DD."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-        historial = ReportService.enviar_reporte_diario_por_email(fecha)
+        fecha = validar_formato_fecha(request.data.get('fecha'))
+        historial = ReportFacade.enviar_reporte_diario_por_email(fecha)
         serializer = HistorialReporteDiarioSerializer(historial)
         return Response(
             {
