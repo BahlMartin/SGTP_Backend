@@ -15,12 +15,6 @@ env_file = BASE_DIR / '.env'
 
 if env_file.exists():
     environ.Env.read_env(str(env_file))
-elif not os.environ.get('DJANGO_SECRET_KEY'):
-    # Fail-Fast si no existe el archivo .env ni variables de entorno cargadas
-    raise ImproperlyConfigured(
-        f"CRITICAL ERROR: No se encontró el archivo .env en {BASE_DIR} ni variables de entorno configuradas. "
-        "Verifique la plantilla .env.example o configure las variables en el dashboard de despliegue."
-    )
 
 # ==============================================================================
 # 1. CLAVES Y VARIABLES SENSIBLES (ESTRICTAMENTE DESDE .env - ZERO HARDCODED)
