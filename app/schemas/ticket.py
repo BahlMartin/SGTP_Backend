@@ -11,6 +11,7 @@ from app.models.ticket import (
 )
 from app.schemas.studies import EstudiosSerializer
 from app.schemas.patient import PacienteSerializer
+from app.models.patient import Paciente
 
 
 class TicketEstudiosSerializer(serializers.ModelSerializer):
@@ -30,7 +31,20 @@ class TicketEstudiosSerializer(serializers.ModelSerializer):
 class TicketCreateSerializer(serializers.ModelSerializer):
     """
     Serializador de entrada para la emisión de Tickets en Admisión.
+    Soporta vincular un paciente existente por ID o crearlo/resolverlo automáticamente
+    a partir de 'paciente_datos' ({ dni, nombre, apellidos, obra_social }).
     """
+    num_totem = serializers.CharField(max_length=50, required=False, default='')
+    paciente = serializers.PrimaryKeyRelatedField(
+        queryset=Paciente.objects.all(),
+        required=False,
+        allow_null=True
+    )
+    paciente_datos = serializers.DictField(
+        required=False,
+        write_only=True,
+        help_text="Datos del paciente para resolución o alta automática ({ dni, nombre, apellidos, obra_social })"
+    )
     estudios_ids = serializers.ListField(
         child=serializers.IntegerField(),
         required=False,
@@ -44,6 +58,7 @@ class TicketCreateSerializer(serializers.ModelSerializer):
             'id_ticket',
             'num_totem',
             'paciente',
+            'paciente_datos',
             'clasificacion_triage',
             'justificacion_otro',
             'estudios_ids',
@@ -51,6 +66,48 @@ class TicketCreateSerializer(serializers.ModelSerializer):
         read_only_fields = ['id_ticket']
 
     def validate(self, attrs: Dict[str, Any]) -> Dict[str, Any]:
+        from django.utils import timezone
+
+        # Autogenerar número de tótem si no fue provisto
+        if not attrs.get('num_totem') or not str(attrs.get('num_totem')).strip():
+            count_hoy = Ticket.objects.filter(
+                fecha_hora_admision__date=timezone.now().date()
+            ).count() + 1
+            attrs['num_totem'] = f"T-{count_hoy:03d}"
+
+        # Resolver o crear paciente si se envió paciente_datos
+        paciente = attrs.get('paciente')
+        paciente_datos = attrs.get('paciente_datos')
+
+        if not paciente and paciente_datos:
+            dni_raw = paciente_datos.get('dni')
+            if not dni_raw:
+                raise serializers.ValidationError({
+                    'paciente_datos': "El campo 'dni' es requerido dentro de paciente_datos."
+                })
+            try:
+                dni_val = int(str(dni_raw).replace('.', '').strip())
+            except (ValueError, TypeError):
+                raise serializers.ValidationError({
+                    'paciente_datos': "El DNI proporcionado debe ser numérico."
+                })
+
+            paciente_instancia, _ = Paciente.objects.get_or_create(
+                dni=dni_val,
+                defaults={
+                    'nombre': str(paciente_datos.get('nombre', 'Sin Nombre')).strip(),
+                    'apellidos': str(paciente_datos.get('apellidos', 'Sin Apellido')).strip(),
+                    'obra_social': str(paciente_datos.get('obra_social', 'Particular')).strip(),
+                    'num_obra_social': str(paciente_datos.get('num_obra_social', '')).strip()
+                }
+            )
+            attrs['paciente'] = paciente_instancia
+            attrs.pop('paciente_datos', None)
+        elif not paciente:
+            raise serializers.ValidationError({
+                'paciente': "Debe especificar el ID de un paciente existente o proporcionar el objeto 'paciente_datos'."
+            })
+
         triage = attrs.get('clasificacion_triage')
         justificacion = attrs.get('justificacion_otro')
 

@@ -50,6 +50,14 @@ class TicketViewSet(viewsets.ModelViewSet):
             for estudio in estudios_queryset:
                 TicketEstudios.objects.create(ticket=ticket, estudio=estudio)
 
+    def create(self, request: Request, *args, **kwargs) -> Response:
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        ticket = serializer.instance
+        headers = self.get_success_headers(serializer.data)
+        return Response(TicketDetailSerializer(ticket).data, status=status.HTTP_201_CREATED, headers=headers)
+
     def update(self, request: Request, *args, **kwargs) -> Response:
         """Aplica la regla de inmutabilidad de 24h y exclusividad para el rol 'Jefa'."""
         partial = kwargs.pop('partial', False)

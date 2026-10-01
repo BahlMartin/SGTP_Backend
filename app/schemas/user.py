@@ -31,6 +31,7 @@ class PersonalAuthSerializer(serializers.ModelSerializer):
         model = Personal
         fields = [
             'id_personal',
+            'email',
             'matricula',
             'nombre',
             'apellidos',
