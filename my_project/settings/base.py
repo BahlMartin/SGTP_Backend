@@ -29,8 +29,26 @@ if '.onrender.com' not in ALLOWED_HOSTS and '*' not in ALLOWED_HOSTS:
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 USE_X_FORWARDED_HOST = True
 
-CORS_ALLOWED_ORIGINS = env.list('DJANGO_CORS_ALLOWED_ORIGINS', default=[])
+CORS_ALLOWED_ORIGINS = env.list(
+    'DJANGO_CORS_ALLOWED_ORIGINS',
+    default=[
+        'https://sgtp-frontend-backend.vercel.app',
+        'http://localhost:5173',
+        'http://localhost:3000'
+    ]
+)
+if 'https://sgtp-frontend-backend.vercel.app' not in CORS_ALLOWED_ORIGINS:
+    CORS_ALLOWED_ORIGINS.append('https://sgtp-frontend-backend.vercel.app')
+
+CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_ALL_ORIGINS = DEBUG  # En modo debug local permite facilitar pruebas si CORS_ALLOWED_ORIGINS está vacío
+
+CSRF_TRUSTED_ORIGINS = [
+    'https://sgtp-frontend-backend.vercel.app',
+    'https://sgtp-backend.onrender.com',
+    'http://localhost:5173',
+    'http://localhost:3000',
+]
 
 # Criptografía: Field-Level Encryption (Fernet) para Pacientes
 FERNET_ENCRYPTION_KEY = env('FERNET_ENCRYPTION_KEY')
@@ -174,6 +192,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_AUTHENTICATION_CLASSES': [
+        'app.core.authentication.CsrfExemptSessionAuthentication',
         'rest_framework.authentication.SessionAuthentication',
         'rest_framework.authentication.BasicAuthentication',
     ],

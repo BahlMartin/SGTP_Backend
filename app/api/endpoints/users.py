@@ -101,8 +101,8 @@ class HabilitacionHorariaViewSet(viewsets.ModelViewSet):
 app_name = 'users_endpoints'
 
 router = DefaultRouter()
-router.register(r'', PersonalViewSet, basename='users')
 router.register(r'habilitaciones-horarias', HabilitacionHorariaViewSet, basename='habilitaciones-horarias')
+router.register(r'', PersonalViewSet, basename='users')
 
 urlpatterns = [
     path('', include(router.urls)),
