@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import environ
 from django.core.exceptions import ImproperlyConfigured
+# Habilitar la lectura del encabezado en el Backend (settings.py) Sigue en la linea 70
+from corsheaders.defaults import default_headers
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -65,6 +67,10 @@ OCR_SERVICE_URL = env('OCR_SERVICE_URL')
 OCR_SERVICE_TIMEOUT_SECONDS = env.int('OCR_SERVICE_TIMEOUT_SECONDS', default=15)
 OCR_SIMILARITY_THRESHOLD = env.int('OCR_SIMILARITY_THRESHOLD', default=80)
 
+# # Habilitar la lectura del encabezado en el Backend (settings.py)
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    'authorization',
+]
 # ==============================================================================
 # 2. APLICACIONES REGISTRADAS
 # ==============================================================================
