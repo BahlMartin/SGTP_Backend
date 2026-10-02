@@ -34,21 +34,46 @@ CORS_ALLOWED_ORIGINS = env.list(
     default=[
         'https://sgtp-frontend-backend.vercel.app',
         'http://localhost:5173',
-        'http://localhost:3000'
+        'http://localhost:3000',
+        'http://127.0.0.1:5173',
+        'http://127.0.0.1:3000',
     ]
 )
 if 'https://sgtp-frontend-backend.vercel.app' not in CORS_ALLOWED_ORIGINS:
     CORS_ALLOWED_ORIGINS.append('https://sgtp-frontend-backend.vercel.app')
 
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https:\/\/.*\.vercel\.app$",
+    r"^http:\/\/localhost:\d+$",
+    r"^http:\/\/127\.0.0\.1:\d+$",
+]
+
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_ALL_ORIGINS = DEBUG  # En modo debug local permite facilitar pruebas si CORS_ALLOWED_ORIGINS está vacío
 
 CSRF_TRUSTED_ORIGINS = [
+    'https://*.vercel.app',
     'https://sgtp-frontend-backend.vercel.app',
     'https://sgtp-backend.onrender.com',
     'http://localhost:5173',
     'http://localhost:3000',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:3000',
 ]
+
+# ==============================================================================
+# COOKIES & SESIONES (Soporte SPA Desacoplada Cross-Site / Vercel / Render)
+# ==============================================================================
+# En producción HTTPS (Render), SameSite='None' y Secure=True son obligatorios para que
+# los navegadores modernos permitan enviar la cookie de sesión en peticiones fetch cross-domain.
+# En desarrollo local por HTTP (DEBUG=True), Secure=False y SameSite='Lax' para evitar rechazos en HTTP.
+SESSION_COOKIE_SAMESITE = env('DJANGO_SESSION_COOKIE_SAMESITE', default='Lax' if DEBUG else 'None')
+SESSION_COOKIE_SECURE = env.bool('DJANGO_SESSION_COOKIE_SECURE', default=not DEBUG)
+SESSION_COOKIE_HTTPONLY = True
+
+CSRF_COOKIE_SAMESITE = env('DJANGO_CSRF_COOKIE_SAMESITE', default='Lax' if DEBUG else 'None')
+CSRF_COOKIE_SECURE = env.bool('DJANGO_CSRF_COOKIE_SECURE', default=not DEBUG)
+CSRF_COOKIE_HTTPONLY = False
 
 # Criptografía: Field-Level Encryption (Fernet) para Pacientes
 FERNET_ENCRYPTION_KEY = env('FERNET_ENCRYPTION_KEY')
