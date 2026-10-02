@@ -66,6 +66,7 @@ class ShiftScheduleRestrictionMiddleware:
 
     EXEMPT_PATHS = [
         '/app/auth/login/',
+        '/app/auth/logout/',
         '/app/auth/emergency-unlock/',
         '/api/schema/',
         '/api/docs/',
