@@ -23,7 +23,7 @@ class Migration(migrations.Migration):
             fields=[
                 ('id', models.AutoField(primary_key=True, serialize=False)),
                 ('numero', models.IntegerField(db_index=True, unique=True, verbose_name='Número de Box')),
-                ('estado', models.CharField(choices=[('Disponible', 'Disponible para Llamado'), ('En Atencion', 'En Atención con Paciente'), ('Fuera de servicio', 'Fuera de Servicio / Cerrado')], default='Fuera de servicio', max_length=30, verbose_name='Estado Operativo del Box')),
+                ('estado', models.CharField(choices=[('Disponible', 'Disponible para Llamado'), ('En atencion', 'En Atención con Paciente'), ('Fuera de servicio', 'Fuera de Servicio / Cerrado')], default='Fuera de servicio', max_length=30, verbose_name='Estado Operativo del Box')),
                 ('activo', models.BooleanField(default=True, verbose_name='Box Habilitado / Activo')),
                 ('discapacidad', models.BooleanField(db_index=True, default=False, verbose_name='Habilitado para Discapacidad / Movilidad Reducida')),
             ],
