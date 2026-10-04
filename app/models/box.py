@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 class EstadoBox(models.TextChoices):
     DISPONIBLE = 'Disponible', 'Disponible para Llamado'
-    EN_ATENCION = 'En Atencion', 'En Atención con Paciente'
+    EN_ATENCION = 'En atencion', 'En Atención con Paciente'
     FUERA_DE_SERVICIO = 'Fuera de servicio', 'Fuera de Servicio / Cerrado'
 
 
