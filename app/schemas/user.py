@@ -61,7 +61,7 @@ class PersonalSerializer(serializers.ModelSerializer):
             'inicio_turno',
             'fin_turno'
         ]
-        read_only_fields = ['id_personal', 'cant_intentos', 'matricula', 'dni']
+        read_only_fields = ['id_personal', 'cant_intentos', 'matricula']
 
     def validate_nombre(self, value: str) -> str:
         validar_solo_letras_min2(value)
