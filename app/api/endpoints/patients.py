@@ -13,6 +13,13 @@ from app.models.patient import Paciente
 from app.schemas.patient import PacienteSerializer
 from app.core.permissions import IsAdmisionOrJefa
 
+# --- NUEVOS IMPORTS PARA EL HISTORIAL ---
+# Importa el modelo Ticket (usando la misma estructura que vimos en tu admin.py)
+from app.models import Ticket 
+# Importa tu serializador de Tickets (ajusta esta ruta según la estructura real de tus carpetas)
+from app.schemas.ticket import TicketSerializer 
+# ----------------------------------------
+
 
 class PacienteViewSet(viewsets.ModelViewSet):
     """
@@ -51,6 +58,23 @@ class PacienteViewSet(viewsets.ModelViewSet):
                 {"detail": f"No se encontró ningún paciente registrado con DNI {dni}."},
                 status=status.HTTP_404_NOT_FOUND
             )
+
+    # --- NUEVO ENDPOINT DE HISTORIAL ---
+    @action(detail=True, methods=['get'])
+    def historial(self, request: Request, pk=None) -> Response:
+        """
+        Endpoint que devuelve el historial de atenciones y estudios de un paciente.
+        Ruta generada: GET /api/patients/{id}/historial/
+        """
+        paciente = self.get_object()
+        
+        # Filtramos los tickets asociados a este paciente, ordenados por fecha descendente.
+        # Asumo que el campo relacional en tu modelo Ticket se llama 'paciente' y la fecha 'fecha_hora_admision'.
+        tickets = Ticket.objects.filter(paciente=paciente).order_by('-fecha_hora_admision')
+        
+        serializer = TicketSerializer(tickets, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    # -----------------------------------
 
 
 app_name = 'patients_endpoints'
