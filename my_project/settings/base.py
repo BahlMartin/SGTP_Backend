@@ -175,7 +175,8 @@ AUTH_PASSWORD_VALIDATORS = [
 # 6. INTERNACIONALIZACIÓN Y ZONA HORARIA
 # ==============================================================================
 LANGUAGE_CODE = 'es-ar'
-TIME_ZONE = 'UTC'  # Estricto UTC para consistencia asistencial
+TIME_ZONE = 'America/Argentina/Buenos_Aires'
+#TIME_ZONE = 'UTC'  # Estricto UTC para consistencia asistencial
 USE_I18N = True
 USE_TZ = True
 
