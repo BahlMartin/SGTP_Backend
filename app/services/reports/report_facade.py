@@ -5,7 +5,7 @@ Orquesta los subsistemas especializados:
 - ReportPdfGenerator: Compilación de documentos en memoria
 - ReportEmailService: Despacho SMTP y trazabilidad de auditoría
 """
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import date
 
 from app.models.report import HistorialReporteDiario
@@ -35,16 +35,24 @@ class ReportFacade:
         return ReportPdfGenerator.generar(metricas)
 
     @classmethod
-    def enviar_reporte_diario_por_email(cls, fecha_consulta: Optional[date] = None) -> HistorialReporteDiario:
+    def enviar_reporte_diario_por_email(
+        cls,
+        fecha_consulta: Optional[date] = None,
+        destinatarios: Optional[List[str]] = None
+    ) -> Optional[HistorialReporteDiario]:
         """
         Orquesta el flujo completo:
-        1. Consolida métricas asistenciales.
-        2. Compila el documento PDF oficial.
-        3. Despacha por correo SMTP y registra auditoría.
+        1. Valida destinatarios (si no hay, no envía y retorna None).
+        2. Consolida métricas asistenciales.
+        3. Compila el documento PDF oficial.
+        4. Despacha por correo SMTP al destinatario y registra auditoría.
         """
+        if not destinatarios:
+            return None
+
         metricas = cls.consolidar_metricas_diarias(fecha_consulta)
         pdf_bytes = cls.generar_pdf_reporte(metricas)
-        return ReportEmailService.despachar(metricas, pdf_bytes)
+        return ReportEmailService.despachar(metricas, pdf_bytes, destinatarios=destinatarios)
 
 
 # Alias para compatibilidad de nomenclatura

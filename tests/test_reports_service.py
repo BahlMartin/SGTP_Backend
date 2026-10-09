@@ -75,10 +75,14 @@ class ReportsServiceTestCase(TestCase):
         # Todo PDF válido comienza con la firma mágica %PDF-
         self.assertTrue(pdf_bytes.startswith(b'%PDF-'))
 
-    def test_despacho_por_correo_a_jefa_y_secretaria(self):
-        """El reporte debe enviarse vía correo a las cuentas con rol Jefa y Secretaria."""
-        historial = ReportService.enviar_reporte_diario_por_email(timezone.now().date())
+    def test_despacho_por_correo_a_usuario_especificado(self):
+        """El reporte debe enviarse vía correo exclusivamente al usuario especificado."""
+        historial = ReportService.enviar_reporte_diario_por_email(
+            timezone.now().date(),
+            destinatarios=[self.jefa.email]
+        )
 
+        self.assertIsNotNone(historial)
         self.assertTrue(historial.exitoso)
         self.assertEqual(historial.total_pacientes_atendidos, 1)
 
@@ -86,10 +90,15 @@ class ReportsServiceTestCase(TestCase):
         self.assertEqual(len(mail.outbox), 1)
         email_enviado = mail.outbox[0]
         self.assertIn('Reporte Asistencial Consolidado', email_enviado.subject)
-        self.assertIn('jefa_reportes@hospital.local', email_enviado.to)
-        self.assertIn('secretaria@hospital.local', email_enviado.to)
+        self.assertEqual([self.jefa.email], email_enviado.to)
         self.assertEqual(len(email_enviado.attachments), 1)
         self.assertTrue(email_enviado.attachments[0][0].endswith('.pdf'))
+
+    def test_despacho_sin_destinatarios_retorna_none(self):
+        """Si no se especifican destinatarios, no debe despachar correo y retorna None."""
+        historial = ReportService.enviar_reporte_diario_por_email(timezone.now().date())
+        self.assertIsNone(historial)
+        self.assertEqual(len(mail.outbox), 0)
 
     def test_validador_formato_fecha_unitario(self):
         """Valida que validar_formato_fecha maneje fechas válidas, nulas y formatos erróneos."""
@@ -134,3 +143,27 @@ class ReportsServiceTestCase(TestCase):
         res_envio = client.post('/app/reports/disparar-envio/', {'fecha': 'fecha-erronea'}, format='json')
         self.assertEqual(res_envio.status_code, 400)
         self.assertEqual(res_envio.data.get('error'), 'FECHA_INVALIDA')
+
+    def test_disparar_envio_exitoso_a_usuario_logeado(self):
+        """Verifica que disparar-envio envíe el correo exclusivamente al email del usuario logeado."""
+        from rest_framework.test import APIClient
+        client = APIClient()
+        client.force_authenticate(user=self.jefa)
+
+        res = client.post('/app/reports/disparar-envio/', {}, format='json')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, [self.jefa.email])
+
+    def test_disparar_envio_sin_email_retorna_401(self):
+        """Verifica que si el usuario autenticado no tiene email, retorna 401 y no envía correo."""
+        from rest_framework.test import APIClient
+        client = APIClient()
+        # Simular usuario sin email
+        self.jefa.email = ''
+        client.force_authenticate(user=self.jefa)
+
+        res = client.post('/app/reports/disparar-envio/', {}, format='json')
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.data.get('error'), 'EMAIL_NO_ENCONTRADO')
+        self.assertEqual(len(mail.outbox), 0)
