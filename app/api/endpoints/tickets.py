@@ -41,6 +41,17 @@ class TicketViewSet(viewsets.ModelViewSet):
 
     @transaction.atomic
     def perform_create(self, serializer) -> None:
+        # Obtenemos los estudios antes de extraerlos
+        estudios_ids = serializer.validated_data.get('estudios_ids', [])
+        
+        # --- NUEVA VALIDACIÓN ---
+        # Si la lista está vacía (no mandaron estudios), cortamos la ejecución y devolvemos error 400
+        if not estudios_ids:
+            raise ValidationError({
+                "detail": "No se puede admitir a un paciente ni crear un ticket sin seleccionar al menos un estudio."
+            })
+        # ------------------------
+
         estudios_ids = serializer.validated_data.pop('estudios_ids', [])
         ticket = serializer.save(personal_admision=self.request.user)
 
