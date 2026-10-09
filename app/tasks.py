@@ -13,11 +13,16 @@ logger = logging.getLogger(__name__)
 def tarea_consolidar_y_enviar_reporte_diario(self) -> str:
     """
     Tarea Celery Beat que consolida el flujo diario asistencial, compila el PDF
-    y lo despacha por correo SMTP a las autoridades del laboratorio (Jefa y Secretaría).
+    y lo despacha por correo SMTP.
     """
     logger.info("Iniciando tarea programada Celery: Consolidación y despacho de reporte diario.")
     try:
         historial = ReportFacade.enviar_reporte_diario_por_email()
+        if not historial:
+            resultado = "No se ejecutó despacho automático de reporte diario: sin destinatarios configurados."
+            logger.info(resultado)
+            return resultado
+
         resultado = (
             f"Reporte diario procesado con éxito (ID: {historial.id}). "
             f"Atendidos: {historial.total_pacientes_atendidos}. "

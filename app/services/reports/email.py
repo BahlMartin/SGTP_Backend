@@ -21,21 +21,31 @@ class ReportEmailService:
     """
 
     @classmethod
-    def despachar(cls, metricas: Dict[str, Any], pdf_bytes: bytes) -> HistorialReporteDiario:
+    def despachar(
+        cls,
+        metricas: Dict[str, Any],
+        pdf_bytes: bytes,
+        destinatarios: Optional[List[str]] = None
+    ) -> Optional[HistorialReporteDiario]:
         """
-        Envía por correo el PDF a los roles autorizados (Jefa y Secretaria) y registra la transacción.
+        Envía por correo el PDF a los destinatarios especificados (usuario logeado)
+        y registra la auditoría. Si no se proveen destinatarios, no envía correo y retorna None.
         """
-        destinatarios: List[str] = list(
-            Personal.objects.filter(
-                rol__in=[RolPersonal.JEFA, RolPersonal.SECRETARIA],
-                activo=True
-            ).values_list('email', flat=True)
-        )
+        if not destinatarios:
+            logger.warning("No se especificaron destinatarios para el reporte. Despacho cancelado.")
+            return None
+
+        destinatarios_validos: List[str] = [
+            d.strip() for d in destinatarios if isinstance(d, str) and d.strip()
+        ]
+        if not destinatarios_validos:
+            logger.warning("Lista de destinatarios vacía. Despacho cancelado.")
+            return None
 
         fecha_str = metricas['fecha']
         asunto = f"[SGTP Hospitalario] Reporte Asistencial Consolidado - {fecha_str}"
         cuerpo = (
-            f"Estimadas autoridades y secretaría:\n\n"
+            f"Estimado/a:\n\n"
             f"Se adjunta el reporte diario consolidado de atención asistencial del SGTP correspondiente al día {fecha_str} (UTC).\n\n"
             f"Resumen Ejecutivo:\n"
             f"- Total de pacientes emitidos: {metricas['total_emitidos']}\n"
@@ -49,29 +59,26 @@ class ReportEmailService:
         exitoso = True
         error_msg = ''
 
-        if destinatarios:
-            try:
-                email = EmailMessage(
-                    subject=asunto,
-                    body=cuerpo,
-                    from_email=settings.DEFAULT_FROM_EMAIL,
-                    to=destinatarios,
-                )
-                email.attach(f"Reporte_Diario_SGTP_{fecha_str}.pdf", pdf_bytes, 'application/pdf')
-                email.send(fail_silently=False)
-            except Exception as e:
-                logger.error("Error al despachar el correo SMTP del reporte diario: %s", e)
-                exitoso = False
-                error_msg = str(e)
-        else:
-            error_msg = "No se encontraron usuarios activos con rol 'Jefa' o 'Secretaria' para notificar."
+        try:
+            email = EmailMessage(
+                subject=asunto,
+                body=cuerpo,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                to=destinatarios_validos,
+            )
+            email.attach(f"Reporte_Diario_SGTP_{fecha_str}.pdf", pdf_bytes, 'application/pdf')
+            email.send(fail_silently=False)
+        except Exception as e:
+            logger.error("Error al despachar el correo SMTP del reporte diario: %s", e)
+            exitoso = False
+            error_msg = str(e)
 
         # Registrar trazabilidad en el modelo de auditoría
         historial = HistorialReporteDiario.objects.create(
             fecha_reporte=datetime.strptime(fecha_str, '%Y-%m-%d').date(),
             total_pacientes_atendidos=metricas['total_atendidos'],
             total_estudios_realizados=metricas['total_estudios'],
-            destinatarios_notificados=", ".join(destinatarios) if destinatarios else "Sin destinatarios",
+            destinatarios_notificados=", ".join(destinatarios_validos),
             exitoso=exitoso,
             error_detalle=error_msg
         )
