@@ -10,6 +10,8 @@ from rest_framework.response import Response
 from rest_framework.routers import DefaultRouter
 from rest_framework.permissions import IsAuthenticated
 
+from app.core.permissions import IsJefaRole
+from app.core.validators import validar_formato_fecha
 from app.models.ticket import (
     Ticket,
     TicketEstudios,
@@ -102,6 +104,44 @@ class TicketViewSet(viewsets.ModelViewSet):
         )
         serializer = TicketDetailSerializer(tickets_pendientes, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(
+        detail=False,
+        methods=['get'],
+        url_path='rendimiento-personal',
+        permission_classes=[IsAuthenticated, IsJefaRole]
+    )
+    def rendimiento_personal(self, request: Request) -> Response:
+        """
+        Calcula y retorna la carga y pacientes atendidos o tickets emitidos por personal en una jornada.
+        Parámetro opcional: ?fecha=YYYY-MM-DD
+        Permiso exclusivo: Admin y Jefa.
+        """
+        fecha = validar_formato_fecha(request.query_params.get('fecha'))
+        datos = TicketService.obtener_rendimiento_personal(fecha_consulta=fecha)
+        return Response(datos, status=status.HTTP_200_OK)
+
+    @action(
+        detail=False,
+        methods=['get'],
+        url_path='resumen-estudios',
+        permission_classes=[IsAuthenticated, IsJefaRole]
+    )
+    def resumen_estudios(self, request: Request) -> Response:
+        """
+        Retorna la cantidad de cada estudio médico realizado en la jornada.
+        Parámetros opcionales: ?fecha=YYYY-MM-DD, ?search=..., ?top=5
+        Permiso exclusivo: Admin y Jefa.
+        """
+        fecha = validar_formato_fecha(request.query_params.get('fecha'))
+        search = request.query_params.get('search')
+        top = request.query_params.get('top')
+        datos = TicketService.obtener_resumen_estudios(
+            fecha_consulta=fecha,
+            search=search,
+            top=top
+        )
+        return Response(datos, status=status.HTTP_200_OK)
 
 
 app_name = 'tickets_endpoints'

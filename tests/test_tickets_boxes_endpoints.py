@@ -129,3 +129,72 @@ class TicketsBoxesEndpointsTestCase(TestCase):
         asig_resp = self.client.get('/app/boxes/asignaciones/')
         self.assertEqual(asig_resp.status_code, status.HTTP_200_OK)
         self.assertGreaterEqual(len(asig_resp.data), 1)
+
+    def test_rendimiento_personal_endpoint(self):
+        """Valida endpoint de rendimiento de personal con permisos exclusivos de Jefa/Admin."""
+        # 1. Denegar a usuario no autenticado
+        self.client.force_authenticate(user=None)
+        resp_anon = self.client.get('/app/tickets/rendimiento-personal/')
+        self.assertIn(resp_anon.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
+
+        # 2. Denegar a usuario sin rol Jefa/Admin (rol BOX)
+        self.client.force_authenticate(user=self.box_user)
+        resp_forbid = self.client.get('/app/tickets/rendimiento-personal/')
+        self.assertEqual(resp_forbid.status_code, status.HTTP_403_FORBIDDEN)
+
+        # 3. Permitir a Jefa
+        self.client.force_authenticate(user=self.jefa_user)
+        # Emitir un ticket por jefa_user
+        Ticket.objects.create(
+            num_totem='T-501',
+            paciente=self.paciente,
+            personal_admision=self.jefa_user,
+            clasificacion_triage=ClasificacionTriage.EXTRACCION_CON_TURNO,
+            estado=EstadoTicket.PENDIENTE
+        )
+
+        resp_ok = self.client.get('/app/tickets/rendimiento-personal/')
+        self.assertEqual(resp_ok.status_code, status.HTTP_200_OK)
+        self.assertIn('fecha', resp_ok.data)
+        self.assertIn('personal', resp_ok.data)
+        self.assertIn('tickets_por_personal', resp_ok.data)
+        # Comprobar que en tickets_por_personal jefa_user tenga al menos 1
+        self.assertGreaterEqual(resp_ok.data['tickets_por_personal'].get(str(self.jefa_user.id_personal), 0), 1)
+
+    def test_resumen_estudios_endpoint(self):
+        """Valida endpoint de resumen de estudios con conteo, top y búsqueda por nombre."""
+        # 1. Denegar sin rol Jefa
+        self.client.force_authenticate(user=self.box_user)
+        resp_forbid = self.client.get('/app/tickets/resumen-estudios/')
+        self.assertEqual(resp_forbid.status_code, status.HTTP_403_FORBIDDEN)
+
+        # 2. Permitir con rol Jefa y verificar conteo
+        self.client.force_authenticate(user=self.jefa_user)
+        ticket = Ticket.objects.create(
+            num_totem='T-601',
+            paciente=self.paciente,
+            personal_admision=self.jefa_user,
+            clasificacion_triage=ClasificacionTriage.EXTRACCION_CON_TURNO,
+            estado=EstadoTicket.PENDIENTE
+        )
+        from app.models.ticket import TicketEstudios
+        TicketEstudios.objects.create(ticket=ticket, estudio=self.estudio)
+
+        # Consulta general
+        resp_ok = self.client.get('/app/tickets/resumen-estudios/')
+        self.assertEqual(resp_ok.status_code, status.HTTP_200_OK)
+        self.assertIn('estudios', resp_ok.data)
+        self.assertGreaterEqual(resp_ok.data['total_estudios_realizados'], 1)
+
+        # Búsqueda específica con parámetro search
+        resp_search = self.client.get('/app/tickets/resumen-estudios/?search=Hemograma')
+        self.assertEqual(resp_search.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(resp_search.data['estudios']), 1)
+        self.assertEqual(resp_search.data['estudios'][0]['nombre'], self.estudio.nombre)
+        self.assertEqual(resp_search.data['estudios'][0]['total'], 1)
+
+        # Búsqueda que no coincide
+        resp_empty = self.client.get('/app/tickets/resumen-estudios/?search=EstudioInexistente999')
+        self.assertEqual(resp_empty.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(resp_empty.data['estudios']), 0)
+
