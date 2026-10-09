@@ -71,8 +71,30 @@ class DispararEnvioReporteView(APIView):
 
     @extend_schema(request=DispararReporteRequestSerializer, responses={200: HistorialReporteDiarioSerializer})
     def post(self, request: Request) -> Response:
+        user = request.user
+        email_destinatario = getattr(user, 'email', None) if (user and user.is_authenticated) else None
+
+        if not email_destinatario:
+            return Response(
+                {
+                    "error": "EMAIL_NO_ENCONTRADO",
+                    "detalle": "No se encontró el email del usuario logeado para enviar el reporte."
+                },
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
         fecha = validar_formato_fecha(request.data.get('fecha'))
-        historial = ReportFacade.enviar_reporte_diario_por_email(fecha)
+        historial = ReportFacade.enviar_reporte_diario_por_email(fecha, destinatarios=[email_destinatario])
+
+        if not historial:
+            return Response(
+                {
+                    "error": "ENVIO_CANCELADO",
+                    "detalle": "No se pudo despachar el reporte por correo."
+                },
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
         serializer = HistorialReporteDiarioSerializer(historial)
         return Response(
             {

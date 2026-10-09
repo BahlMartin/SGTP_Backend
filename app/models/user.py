@@ -70,7 +70,7 @@ class PersonalManager(BaseUserManager):
         if 'dni' not in extra_fields:
             dni_env = os.environ.get('DJANGO_SUPERUSER_DNI')
             if dni_env:
-                extra_fields['dni'] = int(dni_env)
+                extra_fields['dni'] = dni_env
             else:
                 raise ValueError("El DNI es obligatorio para crear el usuario administrador (configúralo en .env o pásalo como argumento).")
 
@@ -99,7 +99,7 @@ class Personal(AbstractBaseUser):
         validators=[validar_solo_letras_min2],
         verbose_name="Apellido(s)"
     )
-    dni = models.IntegerField(unique=True, verbose_name="Documento Nacional de Identidad")
+    dni = models.CharField(max_length=8, unique=True, verbose_name="Documento Nacional de Identidad")
     matricula = models.CharField(
         max_length=50,
         blank=True,
