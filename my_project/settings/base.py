@@ -247,3 +247,11 @@ DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL')
 # 11. AUDITORÍA INALTERABLE (django-auditlog)
 # ==============================================================================
 AUDITLOG_ENABLED = env.bool('AUDITLOG_ENABLED', default=True)
+
+# ==============================================================================
+# CONFIGURACIÓN DE COOKIES PARA CROSS-DOMAIN (Vercel <-> Render)
+# ==============================================================================
+SESSION_COOKIE_SAMESITE = 'None'
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SAMESITE = 'None'
+CSRF_COOKIE_SECURE = True
