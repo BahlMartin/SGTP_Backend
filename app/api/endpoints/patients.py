@@ -15,6 +15,7 @@ from app.schemas.ticket import TicketHistorialDetailSerializer
 from app.core.permissions import IsAdmisionOrJefa
 
 
+
 class PacienteViewSet(viewsets.ModelViewSet):
     """
     CRUD de Pacientes.

@@ -25,8 +25,8 @@ class ReportEmailService:
         cls,
         metricas: Dict[str, Any],
         pdf_bytes: bytes,
-        destinatarios: Optional[List[str]] = None
-    ) -> Optional[HistorialReporteDiario]:
+        destinatarios: list[str] | None = None
+    ) -> HistorialReporteDiario | None:
         """
         Envía por correo el PDF a los destinatarios especificados (usuario logeado)
         y registra la auditoría. Si no se proveen destinatarios, no envía correo y retorna None.

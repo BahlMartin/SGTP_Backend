@@ -61,7 +61,8 @@ class PersonalSerializer(serializers.ModelSerializer):
             'inicio_turno',
             'fin_turno'
         ]
-        read_only_fields = ['id_personal', 'cant_intentos', 'matricula', 'dni']
+        # Se elimina 'matricula' de esta lista para que el backend la procese al guardar:
+        read_only_fields = ['id_personal', 'cant_intentos']
 
     def validate_nombre(self, value: str) -> str:
         validar_solo_letras_min2(value)

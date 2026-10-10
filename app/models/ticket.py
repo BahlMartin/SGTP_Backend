@@ -21,13 +21,13 @@ class EstadoTicket(models.TextChoices):
 
 
 class ClasificacionTriage(models.TextChoices):
-    GUARDIA = 'Guardia', 'Guardia / Urgencia Inmediata'
-    MEDICOS = 'Medicos', 'Médicos / Personal Sanitario'
+    GUARDIA = 'guardia', 'Guardia / Urgencia Inmediata'
+    MEDICOS = 'medicos', 'Médicos / Personal Sanitario'
     DISCAPACIDAD = 'discapacidad', 'Discapacidad / Movilidad Reducida'
-    ONCOLOGIA = 'Oncologia', 'Pacientes Oncológicos'
-    EXTRACCION_CON_TURNO = 'Extraccion con Turno', 'Extracción con Turno Previo'
-    EXTRACCION_SIN_TURNO = 'Extraccion sin Turno', 'Extracción Espontánea sin Turno'
-    OTRO = 'Otro', 'Otro Tipo de Atención'
+    ONCOLOGIA = 'oncologia', 'Pacientes Oncológicos'
+    EXTRACCION_CON_TURNO = 'extraccion con turno', 'Extracción con Turno Previo'
+    EXTRACCION_SIN_TURNO = 'extraccion sin turno', 'Extracción Espontánea sin Turno'
+    OTRO = 'otro', 'Otro Tipo de Atención'
 
 
 class Ticket(SoftDeleteModel):

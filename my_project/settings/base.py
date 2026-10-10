@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import environ
 from django.core.exceptions import ImproperlyConfigured
+# Habilitar la lectura del encabezado en el Backend (settings.py) Sigue en la linea 70
+from corsheaders.defaults import default_headers
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -21,34 +23,38 @@ if env_file.exists():
 # ==============================================================================
 SECRET_KEY = env('DJANGO_SECRET_KEY')
 DEBUG = env.bool('DJANGO_DEBUG', default=False)
-ALLOWED_HOSTS = env.list('DJANGO_ALLOWED_HOSTS', default=['localhost', '127.0.0.1', '.onrender.com'])
-if '.onrender.com' not in ALLOWED_HOSTS and '*' not in ALLOWED_HOSTS:
-    ALLOWED_HOSTS.append('.onrender.com')
+ALLOWED_HOSTS = env.list('DJANGO_ALLOWED_HOSTS')
 
 # Reverse Proxy SSL & Host para Render / Cloudflare
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 USE_X_FORWARDED_HOST = True
 
-CORS_ALLOWED_ORIGINS = env.list(
-    'DJANGO_CORS_ALLOWED_ORIGINS',
-    default=[
-        'https://sgtp-frontend-backend.vercel.app',
-        'http://localhost:5173',
-        'http://localhost:3000'
-    ]
-)
-if 'https://sgtp-frontend-backend.vercel.app' not in CORS_ALLOWED_ORIGINS:
-    CORS_ALLOWED_ORIGINS.append('https://sgtp-frontend-backend.vercel.app')
+CORS_ALLOWED_ORIGINS = env.list('DJANGO_CORS_ALLOWED_ORIGINS')
+
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https:\/\/.*\.vercel\.app$",
+    r"^http:\/\/localhost:\d+$",
+    r"^http:\/\/127\.0.0\.1:\d+$",
+]
 
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_ALL_ORIGINS = DEBUG  # En modo debug local permite facilitar pruebas si CORS_ALLOWED_ORIGINS está vacío
 
-CSRF_TRUSTED_ORIGINS = [
-    'https://sgtp-frontend-backend.vercel.app',
-    'https://sgtp-backend.onrender.com',
-    'http://localhost:5173',
-    'http://localhost:3000',
-]
+CSRF_TRUSTED_ORIGINS = env.list('DJANGO_CSRF_TRUSTED_ORIGINS', default=CORS_ALLOWED_ORIGINS)
+
+# ==============================================================================
+# COOKIES & SESIONES (Soporte SPA Desacoplada Cross-Site / Vercel / Render)
+# ==============================================================================
+# En producción HTTPS (Render), SameSite='None' y Secure=True son obligatorios para que
+# los navegadores modernos permitan enviar la cookie de sesión en peticiones fetch cross-domain.
+# En desarrollo local por HTTP (DEBUG=True), Secure=False y SameSite='Lax' para evitar rechazos en HTTP.
+SESSION_COOKIE_SAMESITE = env('DJANGO_SESSION_COOKIE_SAMESITE', default='Lax' if DEBUG else 'None')
+SESSION_COOKIE_SECURE = env.bool('DJANGO_SESSION_COOKIE_SECURE', default=not DEBUG)
+SESSION_COOKIE_HTTPONLY = True
+
+CSRF_COOKIE_SAMESITE = env('DJANGO_CSRF_COOKIE_SAMESITE', default='Lax' if DEBUG else 'None')
+CSRF_COOKIE_SECURE = env.bool('DJANGO_CSRF_COOKIE_SECURE', default=not DEBUG)
+CSRF_COOKIE_HTTPONLY = False
 
 # Criptografía: Field-Level Encryption (Fernet) para Pacientes
 FERNET_ENCRYPTION_KEY = env('FERNET_ENCRYPTION_KEY')
@@ -65,6 +71,10 @@ OCR_SERVICE_URL = env('OCR_SERVICE_URL')
 OCR_SERVICE_TIMEOUT_SECONDS = env.int('OCR_SERVICE_TIMEOUT_SECONDS', default=15)
 OCR_SIMILARITY_THRESHOLD = env.int('OCR_SIMILARITY_THRESHOLD', default=80)
 
+# # Habilitar la lectura del encabezado en el Backend (settings.py)
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    'authorization',
+]
 # ==============================================================================
 # 2. APLICACIONES REGISTRADAS
 # ==============================================================================
@@ -165,7 +175,8 @@ AUTH_PASSWORD_VALIDATORS = [
 # 6. INTERNACIONALIZACIÓN Y ZONA HORARIA
 # ==============================================================================
 LANGUAGE_CODE = 'es-ar'
-TIME_ZONE = 'UTC'  # Estricto UTC para consistencia asistencial
+TIME_ZONE = 'America/Argentina/Buenos_Aires'
+#TIME_ZONE = 'UTC'  # Estricto UTC para consistencia asistencial
 USE_I18N = True
 USE_TZ = True
 

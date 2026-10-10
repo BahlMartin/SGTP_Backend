@@ -23,12 +23,10 @@ def validar_solo_letras_min2(valor: Any) -> None:
         raise ValidationError("Solo se admiten caracteres alfabéticos y espacios.")
 
 
-def validar_dni_positivo(valor: Optional[int]) -> None:
-    """
-    Valida que el DNI sea un número entero positivo mayor a cero.
-    """
-    if valor is not None and valor <= 0:
-        raise ValidationError("El DNI debe ser un número entero positivo válido.")
+def validar_dni_positivo(valor):
+    # Verifica si el valor (que ahora es un string) contiene solo números
+    if not str(valor).isdigit():
+        raise ValidationError("El DNI debe contener únicamente números positivos.")
 
 
 def validar_texto(valor: Any, mensaje: Optional[str] = None) -> None:

@@ -23,7 +23,7 @@ class Migration(migrations.Migration):
             fields=[
                 ('id', models.AutoField(primary_key=True, serialize=False)),
                 ('numero', models.IntegerField(db_index=True, unique=True, verbose_name='Número de Box')),
-                ('estado', models.CharField(choices=[('Disponible', 'Disponible para Llamado'), ('En Atencion', 'En Atención con Paciente'), ('Fuera de servicio', 'Fuera de Servicio / Cerrado')], default='Fuera de servicio', max_length=30, verbose_name='Estado Operativo del Box')),
+                ('estado', models.CharField(choices=[('Disponible', 'Disponible para Llamado'), ('En atencion', 'En Atención con Paciente'), ('Fuera de servicio', 'Fuera de Servicio / Cerrado')], default='Fuera de servicio', max_length=30, verbose_name='Estado Operativo del Box')),
                 ('activo', models.BooleanField(default=True, verbose_name='Box Habilitado / Activo')),
                 ('discapacidad', models.BooleanField(db_index=True, default=False, verbose_name='Habilitado para Discapacidad / Movilidad Reducida')),
             ],
@@ -141,7 +141,7 @@ class Migration(migrations.Migration):
                 ('id_ticket', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False, verbose_name='Identificador Universal del Ticket')),
                 ('num_totem', models.CharField(db_index=True, max_length=50, verbose_name='Número Manual Tótem / Externo')),
                 ('fecha_hora_admision', models.DateTimeField(auto_now_add=True, db_index=True, verbose_name='Fecha y Hora de Admisión (UTC)')),
-                ('clasificacion_triage', models.CharField(choices=[('Guardia', 'Guardia / Urgencia Inmediata'), ('Medicos', 'Médicos / Personal Sanitario'), ('discapacidad', 'Discapacidad / Movilidad Reducida'), ('Oncologia', 'Pacientes Oncológicos'), ('Extraccion con Turno', 'Extracción con Turno Previo'), ('Extraccion sin Turno', 'Extracción Espontánea sin Turno'), ('Otro', 'Otro Tipo de Atención')], db_index=True, max_length=40, verbose_name='Clasificación de Triage Asistencial')),
+                ('clasificacion_triage', models.CharField(choices=[('guardia', 'Guardia / Urgencia Inmediata'), ('medicos', 'Médicos / Personal Sanitario'), ('discapacidad', 'Discapacidad / Movilidad Reducida'), ('oncologia', 'Pacientes Oncológicos'), ('extraccion con turno', 'Extracción con Turno Previo'), ('extraccion sin turno', 'Extracción Espontánea sin Turno'), ('otro', 'Otro Tipo de Atención')], db_index=True, max_length=40, verbose_name='Clasificación de Triage Asistencial')),
                 ('justificacion_otro', models.TextField(blank=True, null=True, verbose_name="Justificación médica (Obligatoria si triage='Otro')")),
                 ('estado', models.CharField(choices=[('Pendiente', 'Pendiente en Sala de Espera'), ('En Atencion', 'En Atención en Box'), ('Finalizado', 'Atención Finalizada'), ('Cancelado', 'Ticket Cancelado / Ausente')], db_index=True, default='Pendiente', max_length=30, verbose_name='Estado de Atención del Ticket')),
                 ('box_actual', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='tickets_atendidos', to='app.box', verbose_name='Box que está atendiendo')),

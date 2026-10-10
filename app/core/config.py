@@ -25,8 +25,8 @@ class Settings:
     # Claves y seguridad
     SECRET_KEY: str = env('DJANGO_SECRET_KEY')
     DEBUG: bool = env.bool('DJANGO_DEBUG', default=False)
-    ALLOWED_HOSTS: List[str] = env.list('DJANGO_ALLOWED_HOSTS', default=['localhost', '127.0.0.1', '.onrender.com'])
-    CORS_ALLOWED_ORIGINS: List[str] = env.list('DJANGO_CORS_ALLOWED_ORIGINS', default=[])
+    ALLOWED_HOSTS: List[str] = env.list('DJANGO_ALLOWED_HOSTS')
+    CORS_ALLOWED_ORIGINS: List[str] = env.list('DJANGO_CORS_ALLOWED_ORIGINS')
     CORS_ALLOW_ALL_ORIGINS: bool = DEBUG
 
     # Criptografía
