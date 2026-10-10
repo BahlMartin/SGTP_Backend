@@ -160,6 +160,62 @@ class TicketDetailSerializer(serializers.ModelSerializer):
         return ""
 
 
+
+class TicketHistorialDetailSerializer(TicketDetailSerializer):
+    """
+    Serializador enriquecido para consultas asistenciales de detalle de ticket, historial clínico y auditoría.
+    Extrae la trazabilidad de atención en Box (Box y Profesional con matrícula) desde la tabla de asignaciones_box.
+    """
+    box_numero = serializers.SerializerMethodField()
+    personal_box_nombre = serializers.SerializerMethodField()
+    personal_box_matricula = serializers.SerializerMethodField()
+    fecha_hora_atencion_box = serializers.SerializerMethodField()
+    motivo_cierre_box = serializers.SerializerMethodField()
+
+    class Meta(TicketDetailSerializer.Meta):
+        fields = TicketDetailSerializer.Meta.fields + [
+            'personal_box_nombre',
+            'personal_box_matricula',
+            'fecha_hora_atencion_box',
+            'motivo_cierre_box',
+        ]
+        read_only_fields = fields
+
+    def _get_ultima_asignacion(self, obj: Ticket):
+        if hasattr(obj, '_prefetched_objects_cache') and 'asignaciones_historial' in obj._prefetched_objects_cache:
+            asignaciones = list(obj.asignaciones_historial.all())
+            return asignaciones[0] if asignaciones else None
+        return obj.asignaciones_historial.select_related('personal', 'box').order_by('-fecha_hora_inicio').first()
+
+    def get_box_numero(self, obj: Ticket):
+        asig = self._get_ultima_asignacion(obj)
+        if asig and asig.box:
+            return asig.box.numero
+        if obj.box_actual:
+            return obj.box_actual.numero
+        return None
+
+    def get_personal_box_nombre(self, obj: Ticket) -> str:
+        asig = self._get_ultima_asignacion(obj)
+        if asig and asig.personal:
+            return f"{asig.personal.apellidos}, {asig.personal.nombre}"
+        return ""
+
+    def get_personal_box_matricula(self, obj: Ticket) -> str:
+        asig = self._get_ultima_asignacion(obj)
+        if asig and asig.personal and asig.personal.matricula:
+            return str(asig.personal.matricula)
+        return ""
+
+    def get_fecha_hora_atencion_box(self, obj: Ticket):
+        asig = self._get_ultima_asignacion(obj)
+        return asig.fecha_hora_inicio if asig else None
+
+    def get_motivo_cierre_box(self, obj: Ticket) -> str:
+        asig = self._get_ultima_asignacion(obj)
+        return asig.motivo_cierre if asig and asig.motivo_cierre else ""
+
+
 # Alias
 TicketSerializer = TicketDetailSerializer
 
@@ -167,5 +223,6 @@ __all__ = [
     'TicketEstudiosSerializer',
     'TicketCreateSerializer',
     'TicketDetailSerializer',
+    'TicketHistorialDetailSerializer',
     'TicketSerializer',
 ]

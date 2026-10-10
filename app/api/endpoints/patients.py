@@ -11,14 +11,9 @@ from rest_framework.permissions import IsAuthenticated
 
 from app.models.patient import Paciente
 from app.schemas.patient import PacienteSerializer
+from app.schemas.ticket import TicketHistorialDetailSerializer
 from app.core.permissions import IsAdmisionOrJefa
 
-# --- NUEVOS IMPORTS PARA EL HISTORIAL ---
-# Importa el modelo Ticket (usando la misma estructura que vimos en tu admin.py)
-from app.models import Ticket 
-# Importa tu serializador de Tickets (ajusta esta ruta según la estructura real de tus carpetas)
-from app.schemas.ticket import TicketSerializer 
-# ----------------------------------------
 
 
 class PacienteViewSet(viewsets.ModelViewSet):
@@ -59,22 +54,28 @@ class PacienteViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-    # --- NUEVO ENDPOINT DE HISTORIAL ---
-    @action(detail=True, methods=['get'])
+    @action(detail=True, methods=['get'], url_path='historial')
     def historial(self, request: Request, pk=None) -> Response:
         """
-        Endpoint que devuelve el historial de atenciones y estudios de un paciente.
-        Ruta generada: GET /api/patients/{id}/historial/
+        Retorna el historial asistencial consolidado del paciente.
+        Incluye sus atenciones previas (tickets) con datos completos de admisión,
+        estudios y profesional/box de atención (AsignacionesBox).
         """
         paciente = self.get_object()
-        
-        # Filtramos los tickets asociados a este paciente, ordenados por fecha descendente.
-        # Asumo que el campo relacional en tu modelo Ticket se llama 'paciente' y la fecha 'fecha_hora_admision'.
-        tickets = Ticket.objects.filter(paciente=paciente).order_by('-fecha_hora_admision')
-        
-        serializer = TicketSerializer(tickets, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-    # -----------------------------------
+        tickets = (
+            paciente.tickets.filter(is_deleted=False)
+            .select_related('personal_admision', 'box_actual')
+            .prefetch_related(
+                'estudios__estudio',
+                'asignaciones_historial__personal',
+                'asignaciones_historial__box'
+            )
+            .order_by('-fecha_hora_admision')
+        )
+        return Response({
+            'paciente': PacienteSerializer(paciente).data,
+            'atenciones': TicketHistorialDetailSerializer(tickets, many=True).data
+        }, status=status.HTTP_200_OK)
 
 
 app_name = 'patients_endpoints'
