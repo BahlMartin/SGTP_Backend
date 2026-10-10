@@ -127,6 +127,7 @@ class TicketDetailSerializer(serializers.ModelSerializer):
     estudios = TicketEstudiosSerializer(many=True, read_only=True)
     box_numero = serializers.ReadOnlyField(source='box_actual.numero')
     personal_admision_nombre = serializers.SerializerMethodField()
+    personal_admision_matricula = serializers.SerializerMethodField()
 
     class Meta:
         model = Ticket
@@ -136,6 +137,7 @@ class TicketDetailSerializer(serializers.ModelSerializer):
             'fecha_hora_admision',
             'personal_admision',
             'personal_admision_nombre',
+            'personal_admision_matricula',
             'paciente',
             'paciente_detalle',
             'clasificacion_triage',
@@ -150,6 +152,11 @@ class TicketDetailSerializer(serializers.ModelSerializer):
     def get_personal_admision_nombre(self, obj: Ticket) -> str:
         if obj.personal_admision:
             return f"{obj.personal_admision.apellidos}, {obj.personal_admision.nombre}"
+        return ""
+
+    def get_personal_admision_matricula(self, obj: Ticket) -> str:
+        if obj.personal_admision and obj.personal_admision.matricula:
+            return str(obj.personal_admision.matricula)
         return ""
 
 
