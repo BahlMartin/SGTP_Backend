@@ -21,6 +21,7 @@ from app.models.studies import Estudios
 from app.schemas.ticket import (
     TicketCreateSerializer,
     TicketDetailSerializer,
+    TicketHistorialDetailSerializer,
 )
 from app.services.ticket_service import TicketService
 from app.services.triage_service import construir_orden_prioridad_case
@@ -33,12 +34,22 @@ class TicketViewSet(viewsets.ModelViewSet):
     - Edición protegida por ventana de 24 horas y rol 'Jefa'.
     - Borrado lógico (Soft-Delete).
     """
-    queryset = Ticket.objects.all().select_related('paciente', 'personal_admision', 'box_actual').prefetch_related('estudios__estudio')
+    queryset = Ticket.objects.all().select_related(
+        'paciente',
+        'personal_admision',
+        'box_actual'
+    ).prefetch_related(
+        'estudios__estudio',
+        'asignaciones_historial__personal',
+        'asignaciones_historial__box'
+    )
     permission_classes = [IsAuthenticated]
 
     def get_serializer_class(self):
         if self.action in ['create', 'update', 'partial_update']:
             return TicketCreateSerializer
+        if self.action == 'retrieve':
+            return TicketHistorialDetailSerializer
         return TicketDetailSerializer
 
     @transaction.atomic

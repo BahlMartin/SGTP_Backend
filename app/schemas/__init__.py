@@ -23,6 +23,7 @@ from app.schemas.ticket import (
     TicketEstudiosSerializer,
     TicketCreateSerializer,
     TicketDetailSerializer,
+    TicketHistorialDetailSerializer,
 )
 from app.schemas.report import HistorialReporteDiarioSerializer, ReportSchema
 from app.schemas.ocr import OCRScanRequestSerializer, OCRScanResponseSerializer
@@ -45,6 +46,7 @@ __all__ = [
     'TicketEstudiosSerializer',
     'TicketCreateSerializer',
     'TicketDetailSerializer',
+    'TicketHistorialDetailSerializer',
     'AsignacionesBoxSerializer',
     'CerrarAtencionSerializer',
     'HistorialReporteDiarioSerializer',
