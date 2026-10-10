@@ -25,11 +25,17 @@ class IsJefaRole(permissions.BasePermission):
 
 
 class IsAdmisionOrJefa(permissions.BasePermission):
-    """Permiso para Admisión, Jefa o Admin."""
+    """Permiso para Admisión, Box, Jefa o Admin."""
 
     def has_permission(self, request: Request, view: APIView) -> bool:
         user = request.user
-        return bool(user and user.is_authenticated and user.rol in [RolPersonal.ADMIN, RolPersonal.JEFA, RolPersonal.ADMISION])
+        # Agregamos RolPersonal.BOX al final de la lista de roles permitidos
+        return bool(user and user.is_authenticated and user.rol in [
+            RolPersonal.ADMIN, 
+            RolPersonal.JEFA, 
+            RolPersonal.ADMISION, 
+            RolPersonal.BOX
+        ])
 
 
 class IsBoxOrJefa(permissions.BasePermission):
