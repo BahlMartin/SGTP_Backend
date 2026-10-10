@@ -68,8 +68,19 @@ class TicketCreateSerializer(serializers.ModelSerializer):
     def validate(self, attrs: Dict[str, Any]) -> Dict[str, Any]:
         from django.utils import timezone
 
-        # Autogenerar número de tótem si no fue provisto
-        if not attrs.get('num_totem') or not str(attrs.get('num_totem')).strip():
+        # Normalizar o autogenerar número de tótem
+        raw_num_totem = str(attrs.get('num_totem') or '').strip()
+        if raw_num_totem:
+            import re
+            match = re.match(r'^(Ext|G|Med|Csl)[-\s]?(\d+)$', raw_num_totem, re.IGNORECASE)
+            if match:
+                prefijo_raw, num_str = match.groups()
+                mapa_prefijos = {'ext': 'Ext', 'g': 'G', 'med': 'Med', 'csl': 'Csl'}
+                prefijo = mapa_prefijos.get(prefijo_raw.lower(), prefijo_raw.capitalize())
+                attrs['num_totem'] = f"{prefijo}-{int(num_str):02d}"
+            else:
+                attrs['num_totem'] = raw_num_totem
+        else:
             count_hoy = Ticket.objects.filter(
                 fecha_hora_admision__date=timezone.now().date()
             ).count() + 1
