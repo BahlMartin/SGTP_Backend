@@ -41,6 +41,27 @@ class PacienteSerializer(serializers.ModelSerializer):
         validar_dni_positivo(value)
         return value
 
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        dni = attrs.get('dni')
+        num_obra_social = attrs.get('num_obra_social')
+
+        if self.instance:
+            if dni is None:
+                dni = self.instance.dni
+            if num_obra_social is None:
+                num_obra_social = self.instance.num_obra_social
+
+        if dni is not None:
+            from app.services.patient_service import PatientService
+            PatientService.validar_consistencia_afiliado_y_dni(
+                dni=dni,
+                num_obra_social=num_obra_social,
+                exclude_paciente_id=self.instance.pk if self.instance else None,
+                field_error_key='num_obra_social'
+            )
+        return attrs
+
 
 # Alias estándar
 PatientSchema = PacienteSerializer

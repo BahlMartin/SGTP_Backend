@@ -12,6 +12,7 @@ from app.models.ticket import (
 from app.schemas.studies import EstudiosSerializer
 from app.schemas.patient import PacienteSerializer
 from app.models.patient import Paciente
+from app.services.patient_service import PatientService
 
 
 class TicketEstudiosSerializer(serializers.ModelSerializer):
@@ -91,27 +92,7 @@ class TicketCreateSerializer(serializers.ModelSerializer):
         paciente_datos = attrs.get('paciente_datos')
 
         if not paciente and paciente_datos:
-            dni_raw = paciente_datos.get('dni')
-            if not dni_raw:
-                raise serializers.ValidationError({
-                    'paciente_datos': "El campo 'dni' es requerido dentro de paciente_datos."
-                })
-            try:
-                dni_val = int(str(dni_raw).replace('.', '').strip())
-            except (ValueError, TypeError):
-                raise serializers.ValidationError({
-                    'paciente_datos': "El DNI proporcionado debe ser numérico."
-                })
-
-            paciente_instancia, _ = Paciente.objects.get_or_create(
-                dni=dni_val,
-                defaults={
-                    'nombre': str(paciente_datos.get('nombre', 'Sin Nombre')).strip(),
-                    'apellidos': str(paciente_datos.get('apellidos', 'Sin Apellido')).strip(),
-                    'obra_social': str(paciente_datos.get('obra_social', 'Particular')).strip(),
-                    'num_obra_social': str(paciente_datos.get('num_obra_social', '')).strip()
-                }
-            )
+            paciente_instancia = PatientService.resolver_o_crear_paciente_para_ticket(paciente_datos)
             attrs['paciente'] = paciente_instancia
             attrs.pop('paciente_datos', None)
         elif not paciente:
