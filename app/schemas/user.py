@@ -2,8 +2,9 @@
 Serializadores DRF y Esquemas para Autenticación, Gestión de Personal y Turnos.
 """
 from typing import Any, Dict
+from django.utils import timezone
 from rest_framework import serializers
-from app.models.user import Personal, HabilitacionHoraria
+from app.models.user import Personal, HabilitacionHoraria, DiaLaboralPersonal
 from app.core.validators import validar_solo_letras_min2
 
 
@@ -21,11 +22,20 @@ class DesbloqueoManualSerializer(serializers.Serializer):
     id_personal = serializers.IntegerField(required=True)
 
 
+class DiaLaboralPersonalSerializer(serializers.ModelSerializer):
+    dia_nombre = serializers.CharField(source='get_dia_semana_display', read_only=True)
+
+    class Meta:
+        model = DiaLaboralPersonal
+        fields = ['dia_semana', 'dia_nombre']
+
+
 class PersonalAuthSerializer(serializers.ModelSerializer):
     """
     Serializador específico para respuestas de autenticación (Login).
     Devuelve únicamente la información de sesión requerida para el frontend.
     """
+    dias_laborales_detalle = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Personal
@@ -37,13 +47,24 @@ class PersonalAuthSerializer(serializers.ModelSerializer):
             'apellidos',
             'rol',
             'inicio_turno',
-            'fin_turno'
+            'fin_turno',
+            'dias_laborales_detalle'
         ]
         read_only_fields = fields
+
+    def get_dias_laborales_detalle(self, obj):
+        return list(obj.dias_laborales.values_list('dia_semana', flat=True))
 
 
 class PersonalSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=False)
+    dias_laborales = serializers.ListField(
+        child=serializers.IntegerField(min_value=0, max_value=6),
+        required=False,
+        write_only=True
+    )
+    dias_laborales_detalle = serializers.SerializerMethodField(read_only=True)
+    habilitaciones_activas_hoy = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Personal
@@ -59,10 +80,29 @@ class PersonalSerializer(serializers.ModelSerializer):
             'activo',
             'cant_intentos',
             'inicio_turno',
-            'fin_turno'
+            'fin_turno',
+            'dias_laborales',
+            'dias_laborales_detalle',
+            'habilitaciones_activas_hoy'
         ]
-        # Se elimina 'matricula' de esta lista para que el backend la procese al guardar:
         read_only_fields = ['id_personal', 'cant_intentos']
+
+    def get_dias_laborales_detalle(self, obj):
+        return list(obj.dias_laborales.values_list('dia_semana', flat=True))
+
+    def get_habilitaciones_activas_hoy(self, obj):
+        hoy = timezone.localdate()
+        habilitaciones = obj.habilitaciones_horarias.filter(fecha=hoy, activa=True).order_by('hora_inicio')
+        return [
+            {
+                'id': h.id,
+                'hora_inicio': str(h.hora_inicio)[:5],
+                'hora_fin': str(h.hora_fin)[:5],
+                'motivo': h.motivo,
+                'aprobado_por_email': h.aprobado_por.email if h.aprobado_por else None
+            }
+            for h in habilitaciones
+        ]
 
     def validate_nombre(self, value: str) -> str:
         validar_solo_letras_min2(value)
@@ -80,6 +120,22 @@ class PersonalSerializer(serializers.ModelSerializer):
                 "Debe especificar tanto inicio_turno como fin_turno para definir la franja horaria."
             )
         return attributes
+
+    def create(self, validated_data):
+        dias = validated_data.pop('dias_laborales', [0, 1, 2, 3, 4])
+        user = super().create(validated_data)
+        for d in dias:
+            DiaLaboralPersonal.objects.create(personal=user, dia_semana=d)
+        return user
+
+    def update(self, instance, validated_data):
+        dias = validated_data.pop('dias_laborales', None)
+        instance = super().update(instance, validated_data)
+        if dias is not None:
+            instance.dias_laborales.all().delete()
+            for d in dias:
+                DiaLaboralPersonal.objects.create(personal=instance, dia_semana=d)
+        return instance
 
 
 class HabilitacionHorariaSerializer(serializers.ModelSerializer):
@@ -102,6 +158,15 @@ class HabilitacionHorariaSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'aprobado_por', 'aprobado_por_email', 'personal_email']
 
+    def validate(self, attrs):
+        instance = HabilitacionHoraria(**attrs)
+        # Asignar usuario actual para validación de clean si está en el contexto
+        request = self.context.get('request')
+        if request and hasattr(request, 'user') and not instance.aprobado_por_id:
+            instance.aprobado_por = request.user
+        instance.clean()
+        return attrs
+
 
 # Alias arquitectónicos
 UserSchema = PersonalSerializer
@@ -114,6 +179,7 @@ __all__ = [
     'DesbloqueoManualSerializer',
     'PersonalAuthSerializer',
     'PersonalSerializer',
+    'DiaLaboralPersonalSerializer',
     'HabilitacionHorariaSerializer',
     'UserSchema',
     'LoginRequestSchema',

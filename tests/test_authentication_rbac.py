@@ -207,3 +207,71 @@ class AuthenticationRBACTestCase(TestCase):
             # Ahora debe permitir el acceso
             response_habilitado = middleware(request)
             self.assertEqual(response_habilitado.status_code, 200)
+
+    def test_dias_laborales_personal_normalizados(self):
+        """Verifica la asignación normalizada (3NF) y unicidad de días de la semana."""
+        from django.db import IntegrityError
+        from app.models.user import DiaLaboralPersonal, DiaSemanaChoices
+
+        # Asignar lunes (0)
+        dia_lun = DiaLaboralPersonal.objects.create(
+            personal=self.admision_user,
+            dia_semana=DiaSemanaChoices.LUNES
+        )
+        self.assertEqual(dia_lun.dia_semana, 0)
+        self.assertIn("Lunes", str(dia_lun))
+
+        # Intentar duplicar Lunes para el mismo personal debe fallar por UniqueConstraint
+        with self.assertRaises(IntegrityError):
+            DiaLaboralPersonal.objects.create(
+                personal=self.admision_user,
+                dia_semana=DiaSemanaChoices.LUNES
+            )
+
+    def test_validacion_solapamiento_horario_excepcional(self):
+        """Verifica que una extensión horaria no pueda solaparse con el turno regular en día laboral."""
+        from django.core.exceptions import ValidationError
+        from app.models.user import DiaLaboralPersonal
+
+        hoy = timezone.localdate()
+        dia_hoy_num = hoy.weekday()
+
+        # Asignar hoy como día laboral del personal (turno 08:00 a 16:00)
+        DiaLaboralPersonal.objects.get_or_create(
+            personal=self.admision_user,
+            dia_semana=dia_hoy_num
+        )
+
+        # 1. Extensión que colisiona (10:00 a 14:00) debe fallar en clean()
+        hab_invalida = HabilitacionHoraria(
+            personal=self.admision_user,
+            aprobado_por=self.jefa_user,
+            fecha=hoy,
+            hora_inicio=time(10, 0),
+            hora_fin=time(14, 0),
+            motivo="Intento de extensión superpuesta"
+        )
+        with self.assertRaises(ValidationError):
+            hab_invalida.clean()
+
+        # 2. Extensión post-turno válida (16:00 a 20:00) debe pasar clean()
+        hab_post = HabilitacionHoraria(
+            personal=self.admision_user,
+            aprobado_por=self.jefa_user,
+            fecha=hoy,
+            hora_inicio=time(16, 0),
+            hora_fin=time(20, 0),
+            motivo="Extensión post-turno válida"
+        )
+        hab_post.clean()  # No debe lanzar excepción
+
+        # 3. Extensión pre-turno válida (06:00 a 08:00) debe pasar clean()
+        hab_pre = HabilitacionHoraria(
+            personal=self.admision_user,
+            aprobado_por=self.jefa_user,
+            fecha=hoy,
+            hora_inicio=time(6, 0),
+            hora_fin=time(8, 0),
+            motivo="Extensión pre-turno válida"
+        )
+        hab_pre.clean()  # No debe lanzar excepción

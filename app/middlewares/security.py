@@ -92,27 +92,27 @@ class ShiftScheduleRestrictionMiddleware:
         if user.rol in [RolPersonal.ADMIN, RolPersonal.JEFA]:
             return self.get_response(request)
 
-        # Para Admision, Box y Secretaria, verificar franja laboral
+        # Para Admision, Box y Secretaria, verificar día laboral y franja horaria
         if user.rol in [RolPersonal.ADMISION, RolPersonal.BOX, RolPersonal.SECRETARIA]:
             now_dt = timezone.localtime(timezone.now())
             now_time = now_dt.time()
             now_date = now_dt.date()
+            dia_actual = now_date.weekday()
+
+            # 1. Verificar si hoy es día laboral habitual
+            es_dia_laboral = user.dias_laborales.filter(dia_semana=dia_actual).exists()
 
             dentro_de_turno = False
-
-            if user.inicio_turno and user.fin_turno:
+            if es_dia_laboral and user.inicio_turno and user.fin_turno:
                 if user.inicio_turno <= user.fin_turno:
                     # Turno ordinario diurno (ej. 07:00 a 15:00)
                     dentro_de_turno = user.inicio_turno <= now_time <= user.fin_turno
                 else:
                     # Turno que cruza la medianoche (ej. 22:00 a 06:00)
                     dentro_de_turno = now_time >= user.inicio_turno or now_time <= user.fin_turno
-            else:
-                # Si no tiene turno configurado explícitamente, se permite acceso o requiere habilitación
-                dentro_de_turno = True
 
+            # 2. Si está fuera de su turno regular o no es su día laboral, verificar HabilitacionHoraria activa
             if not dentro_de_turno:
-                # Verificar si existe habilitación excepcional activa para hoy otorgada por Jefa/Admin
                 tiene_habilitacion = HabilitacionHoraria.objects.filter(
                     personal=user,
                     fecha=now_date,
@@ -127,7 +127,7 @@ class ShiftScheduleRestrictionMiddleware:
                             "error": "ACCESO_FUERA_DE_TURNO",
                             "detail": (
                                 f"Acceso bloqueado: Su usuario ({user.email} - Rol {user.rol}) "
-                                f"se encuentra fuera de su franja laboral asignada ({user.inicio_turno} a {user.fin_turno}). "
+                                f"se encuentra fuera de su franja laboral o día asignado. "
                                 "Requiere una habilitación de horario excepcional autorizada por la Jefa de Laboratorio."
                             ),
                             "hora_actual_servidor": str(now_time),

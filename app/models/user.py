@@ -202,13 +202,59 @@ class Personal(AbstractBaseUser):
 
 
 # ==============================================================================
+# ENUM DE DÍAS DE LA SEMANA Y MODELO DE DÍAS LABORALES (3NF)
+# ==============================================================================
+
+class DiaSemanaChoices(models.IntegerChoices):
+    LUNES = 0, 'Lunes'
+    MARTES = 1, 'Martes'
+    MIERCOLES = 2, 'Miércoles'
+    JUEVES = 3, 'Jueves'
+    VIERNES = 4, 'Viernes'
+    SABADO = 5, 'Sábado'
+    DOMINGO = 6, 'Domingo'
+
+
+class DiaLaboralPersonal(models.Model):
+    """
+    Representa de forma normalizada (3NF) los días de la semana en los que
+    el personal presta servicio ordinario.
+    """
+    id = models.AutoField(primary_key=True)
+    personal = models.ForeignKey(
+        Personal,
+        on_delete=models.CASCADE,
+        related_name='dias_laborales'
+    )
+    dia_semana = models.SmallIntegerField(
+        choices=DiaSemanaChoices.choices,
+        verbose_name="Día de la Semana"
+    )
+
+    class Meta:
+        db_table = 'sgtp_personal_dias_laborales'
+        verbose_name = 'Día Laboral de Personal'
+        verbose_name_plural = 'Días Laborales de Personal'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['personal', 'dia_semana'],
+                name='unique_personal_dia_laboral'
+            )
+        ]
+        ordering = ['dia_semana']
+
+    def __str__(self) -> str:
+        return f"{self.personal.email} - {self.get_dia_semana_display()}"
+
+
+# ==============================================================================
 # MODELO HABILITACIÓN HORARIA
 # ==============================================================================
 
 class HabilitacionHoraria(models.Model):
     """
     Permite el ingreso excepcional de personal (Admision, Box, Secretaria)
-    fuera de su franja horaria habitual, previa aprobación de la Jefa.
+    fuera de su franja horaria habitual, previa aprobación de la Jefa o Admin.
     """
     id = models.AutoField(primary_key=True)
     personal = models.ForeignKey(
@@ -231,17 +277,45 @@ class HabilitacionHoraria(models.Model):
         db_table = 'sgtp_habilitacion_horaria'
         verbose_name = 'Habilitación Horaria Excepcional'
         verbose_name_plural = 'Habilitaciones Horarias Excepcionales'
+        indexes = [
+            models.Index(fields=['personal', 'fecha', 'activa', 'hora_inicio', 'hora_fin'], name='sgtp_hab_idx'),
+        ]
 
     def __str__(self) -> str:
         return f"Excepción {self.personal.email} ({self.fecha} {self.hora_inicio}-{self.hora_fin})"
 
     def clean(self) -> None:
-        """Validaciones de consistencia para la autorización de excepciones de turno."""
+        """
+        Validaciones de consistencia:
+        1. Solo Jefa o Admin pueden autorizar.
+        2. hora_inicio < hora_fin.
+        3. No superposición con el turno ordinario si la fecha coincide con un día laboral habitual.
+        """
         super().clean()
         if self.aprobado_por and self.aprobado_por.rol not in [RolPersonal.JEFA, RolPersonal.ADMIN]:
             raise ValidationError("Solo una usuaria con rol 'Jefa' o 'Admin' puede autorizar excepciones de turno.")
         if self.hora_inicio and self.hora_fin and self.hora_inicio >= self.hora_fin:
             raise ValidationError("La hora de inicio debe ser estrictamente anterior a la hora de fin.")
+
+        if self.personal and self.fecha and self.hora_inicio and self.hora_fin:
+            user = self.personal
+            weekday_num = self.fecha.weekday()
+            es_dia_laboral = user.dias_laborales.filter(dia_semana=weekday_num).exists()
+
+            # Si es día laboral habitual y tiene franja definida, la extensión no puede solaparse con su turno
+            if es_dia_laboral and user.inicio_turno and user.fin_turno:
+                turno_inicio = user.inicio_turno
+                turno_fin = user.fin_turno
+
+                # Caso turno diurno estándar (ej: 08:00 a 16:00)
+                if turno_inicio < turno_fin:
+                    solapa = not (self.hora_fin <= turno_inicio or self.hora_inicio >= turno_fin)
+                    if solapa:
+                        raise ValidationError(
+                            f"Inconsistencia: La extensión horaria ({self.hora_inicio} - {self.hora_fin}) "
+                            f"se solapa con el turno habitual del personal ({turno_inicio} - {turno_fin}). "
+                            "Las horas extras deben ser previas al inicio o posteriores al fin del turno."
+                        )
 
     def delete(self, using=None, keep_parents: bool = False):
         """Borrado lógico: marca la habilitación horaria como inactiva."""
@@ -270,6 +344,7 @@ User = Personal
 
 # Registro de auditoría inalterable
 auditlog.register(Personal, exclude_fields=['password', 'last_login'])
+auditlog.register(DiaLaboralPersonal)
 auditlog.register(HabilitacionHoraria)
 
 __all__ = [
@@ -277,5 +352,7 @@ __all__ = [
     'PersonalManager',
     'Personal',
     'User',
+    'DiaSemanaChoices',
+    'DiaLaboralPersonal',
     'HabilitacionHoraria',
 ]

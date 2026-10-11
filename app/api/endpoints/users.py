@@ -63,17 +63,24 @@ class HabilitacionHorariaViewSet(viewsets.ModelViewSet):
     Gestión de autorizaciones de horas extras aprobadas por Jefa o Admin.
     Implementa borrado lógico (Soft-Delete) desactivando la habilitación horaria.
     """
-    queryset = HabilitacionHoraria.objects.filter(activa=True).order_by('-fecha')
+    queryset = HabilitacionHoraria.objects.filter(activa=True).select_related('personal', 'aprobado_por').order_by('-fecha')
     serializer_class = HabilitacionHorariaSerializer
     permission_classes = [IsJefaRole]
 
     def get_queryset(self):
-        if self.action == 'reactivar':
-            return HabilitacionHoraria.objects.all().order_by('-fecha')
-        qs = HabilitacionHoraria.objects.all().order_by('-fecha')
+        qs = HabilitacionHoraria.objects.select_related('personal', 'aprobado_por').order_by('-fecha')
         incluir_inactivas = self.request.query_params.get('incluir_inactivas', 'false').lower() == 'true'
-        if not incluir_inactivas:
+        if not incluir_inactivas and self.action != 'reactivar':
             qs = qs.filter(activa=True)
+
+        personal_id = self.request.query_params.get('personal')
+        if personal_id:
+            qs = qs.filter(personal_id=personal_id)
+
+        fecha = self.request.query_params.get('fecha')
+        if fecha:
+            qs = qs.filter(fecha=fecha)
+
         return qs
 
     def perform_create(self, serializer: HabilitacionHorariaSerializer) -> None:
