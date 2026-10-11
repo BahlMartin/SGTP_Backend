@@ -13,6 +13,7 @@ from app.services.reports import (
     ReportEmailService,
 )
 from app.services.ocr_service import OCRIntegrationService
+from app.services.patient_service import PatientService
 
 __all__ = [
     'payment_service',
@@ -27,4 +28,5 @@ __all__ = [
     'ReportPdfGenerator',
     'ReportEmailService',
     'OCRIntegrationService',
+    'PatientService',
 ]
