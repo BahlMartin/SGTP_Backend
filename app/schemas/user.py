@@ -138,35 +138,8 @@ class PersonalSerializer(serializers.ModelSerializer):
         return instance
 
 
-class HabilitacionHorariaSerializer(serializers.ModelSerializer):
-    aprobado_por_email = serializers.ReadOnlyField(source='aprobado_por.email')
-    personal_email = serializers.ReadOnlyField(source='personal.email')
-
-    class Meta:
-        model = HabilitacionHoraria
-        fields = [
-            'id',
-            'personal',
-            'personal_email',
-            'aprobado_por',
-            'aprobado_por_email',
-            'fecha',
-            'hora_inicio',
-            'hora_fin',
-            'motivo',
-            'activa',
-        ]
-        read_only_fields = ['id', 'aprobado_por', 'aprobado_por_email', 'personal_email']
-
-    def validate(self, attrs):
-        instance = HabilitacionHoraria(**attrs)
-        # Asignar usuario actual para validación de clean si está en el contexto
-        request = self.context.get('request')
-        if request and hasattr(request, 'user') and not instance.aprobado_por_id:
-            instance.aprobado_por = request.user
-        instance.clean()
-        return attrs
-
+# Re-exportación desde app.schemas.shifts para mantener arquitectura limpia
+from app.schemas.shifts import HabilitacionHorariaSerializer, PlanificacionHorasExtrasSerializer
 
 # Alias arquitectónicos
 UserSchema = PersonalSerializer
@@ -181,6 +154,7 @@ __all__ = [
     'PersonalSerializer',
     'DiaLaboralPersonalSerializer',
     'HabilitacionHorariaSerializer',
+    'PlanificacionHorasExtrasSerializer',
     'UserSchema',
     'LoginRequestSchema',
     'EmergencyUnlockSchema',

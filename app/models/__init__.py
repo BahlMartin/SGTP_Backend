@@ -3,7 +3,8 @@ Módulo de Modelos ORM para SGTP Backend.
 Centraliza las entidades del sistema: Usuarios, Items (Estudios), Pacientes, Triage y Reportes.
 """
 from app.models.common import SoftDeleteModel
-from app.models.user import Personal, User, RolPersonal, HabilitacionHoraria, DiaSemanaChoices, DiaLaboralPersonal
+from app.models.user import Personal, User, RolPersonal, DiaSemanaChoices, DiaLaboralPersonal
+from app.models.shifts import PlanificacionHorasExtras, HabilitacionHoraria, TipoExtensionChoices
 from app.models.studies import Estudios, Item, CatalogItem, TipoMuestra, Seccion, SeccionEstudio
 from app.models.patient import Paciente
 from app.models.box import (
@@ -27,7 +28,9 @@ __all__ = [
     'RolPersonal',
     'DiaSemanaChoices',
     'DiaLaboralPersonal',
+    'PlanificacionHorasExtras',
     'HabilitacionHoraria',
+    'TipoExtensionChoices',
     'Estudios',
     'Item',
     'CatalogItem',

@@ -7,8 +7,8 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.routers import DefaultRouter
 
-from app.models.user import Personal, HabilitacionHoraria
-from app.schemas.user import PersonalSerializer, HabilitacionHorariaSerializer
+from app.models.user import Personal, HabilitacionHoraria, PlanificacionHorasExtras
+from app.schemas.user import PersonalSerializer, HabilitacionHorariaSerializer, PlanificacionHorasExtrasSerializer
 from app.services.auth_service import AuthenticationService
 from app.core.permissions import JerarquiaCreacionPersonalPermission, IsJefaRole
 
@@ -105,9 +105,42 @@ class HabilitacionHorariaViewSet(viewsets.ModelViewSet):
         )
 
 
+class PlanificacionHorasExtrasViewSet(viewsets.ModelViewSet):
+    """
+    Gestión de planificaciones mensuales de horas extras aprobadas por Jefa o Admin.
+    """
+    queryset = PlanificacionHorasExtras.objects.filter(activa=True).select_related('personal', 'aprobado_por').order_by('-anio', '-mes')
+    serializer_class = PlanificacionHorasExtrasSerializer
+    permission_classes = [IsJefaRole]
+
+    def get_queryset(self):
+        qs = PlanificacionHorasExtras.objects.select_related('personal', 'aprobado_por').order_by('-anio', '-mes')
+        incluir_inactivas = self.request.query_params.get('incluir_inactivas', 'false').lower() == 'true'
+        if not incluir_inactivas:
+            qs = qs.filter(activa=True)
+
+        personal_id = self.request.query_params.get('personal')
+        if personal_id:
+            qs = qs.filter(personal_id=personal_id)
+
+        anio = self.request.query_params.get('anio')
+        if anio:
+            qs = qs.filter(anio=anio)
+
+        mes = self.request.query_params.get('mes')
+        if mes:
+            qs = qs.filter(mes=mes)
+
+        return qs
+
+    def perform_create(self, serializer: PlanificacionHorasExtrasSerializer) -> None:
+        serializer.save(aprobado_por=self.request.user)
+
+
 app_name = 'users_endpoints'
 
 router = DefaultRouter()
+router.register(r'planificaciones-horas-extras', PlanificacionHorasExtrasViewSet, basename='planificaciones-horas-extras')
 router.register(r'habilitaciones-horarias', HabilitacionHorariaViewSet, basename='habilitaciones-horarias')
 router.register(r'', PersonalViewSet, basename='users')
 
@@ -118,6 +151,7 @@ urlpatterns = [
 __all__ = [
     'PersonalViewSet',
     'HabilitacionHorariaViewSet',
+    'PlanificacionHorasExtrasViewSet',
     'router',
     'urlpatterns',
 ]
