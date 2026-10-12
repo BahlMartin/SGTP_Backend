@@ -7,7 +7,7 @@ from datetime import timedelta, datetime, date, time
 from django.db import transaction
 from django.db.models import Count
 from django.utils import timezone
-from django.core.exceptions import ValidationError, PermissionDenied
+from django.core.exceptions import ValidationError, PermissionDenied, ObjectDoesNotExist
 
 from app.models.user import Personal, RolPersonal
 from app.models.ticket import Ticket, TicketEstudios
@@ -197,6 +197,105 @@ class TicketService:
             'fecha': str(fecha_consulta),
             'total_estudios_realizados': total_estudios_realizados,
             'estudios': estudios_list
+        }
+
+    @classmethod
+    def obtener_tickets_por_personal(
+        cls,
+        personal_id: int,
+        fecha_consulta: Optional[date] = None,
+        tipo: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Retorna el listado de tickets asistenciales vinculados a un integrante del personal.
+        - Para Admisión: tickets emitidos por el operador, ordenados del último al menor.
+        - Para Box: tickets recibidos, atendidos y extraídos por el técnico, ordenados del último al menor.
+        Parámetro opcional: fecha_consulta (YYYY-MM-DD). Si no se envía o es None, puede retornar los de la jornada o históricos.
+        """
+        try:
+            personal = Personal.objects.get(id_personal=personal_id)
+        except Personal.DoesNotExist:
+            raise ObjectDoesNotExist(f"No se encontró ningún personal con ID {personal_id}.")
+
+        es_admision = (tipo.lower() == 'admision') if tipo else (personal.rol == RolPersonal.ADMISION)
+
+        inicio_dia = None
+        fin_dia = None
+        if fecha_consulta:
+            inicio_dia = timezone.make_aware(datetime.combine(fecha_consulta, time.min))
+            fin_dia = timezone.make_aware(datetime.combine(fecha_consulta, time.max))
+
+        if es_admision:
+            tickets_qs = (
+                Ticket.objects.filter(personal_admision_id=personal_id, is_deleted=False)
+                .select_related('paciente', 'personal_admision', 'box_actual')
+                .prefetch_related(
+                    'estudios__estudio',
+                    'asignaciones_historial__personal',
+                    'asignaciones_historial__box'
+                )
+            )
+            if inicio_dia and fin_dia:
+                tickets_qs = tickets_qs.filter(fecha_hora_admision__range=(inicio_dia, fin_dia))
+
+            tickets_qs = tickets_qs.order_by('-fecha_hora_admision', '-id_ticket')
+            tickets = list(tickets_qs)
+        else:
+            # Técnico / Box: tickets que recibió y extrajo el técnico
+            asignaciones_qs = AsignacionesBox.objects.filter(
+                personal_id=personal_id,
+                ticket__isnull=False,
+                ticket__is_deleted=False
+            )
+            if inicio_dia and fin_dia:
+                asignaciones_qs = asignaciones_qs.filter(fecha_hora_inicio__range=(inicio_dia, fin_dia))
+
+            # Orden descendente por inicio de atención en box
+            ticket_ids_ordenados = list(
+                asignaciones_qs.order_by('-fecha_hora_inicio', '-id')
+                .values_list('ticket_id', flat=True)
+            )
+
+            seen = set()
+            unique_ids = []
+            for tid in ticket_ids_ordenados:
+                if tid not in seen:
+                    seen.add(tid)
+                    unique_ids.append(tid)
+
+            if unique_ids:
+                tickets_dict = {
+                    t.id_ticket: t
+                    for t in Ticket.objects.filter(id_ticket__in=unique_ids)
+                        .select_related('paciente', 'personal_admision', 'box_actual')
+                        .prefetch_related(
+                            'estudios__estudio',
+                            'asignaciones_historial__personal',
+                            'asignaciones_historial__box'
+                        )
+                }
+                tickets = [tickets_dict[tid] for tid in unique_ids if tid in tickets_dict]
+            else:
+                tickets = []
+
+        from app.schemas.ticket import TicketHistorialDetailSerializer
+        tickets_serialized = TicketHistorialDetailSerializer(tickets, many=True).data
+
+        return {
+            'personal': {
+                'id': personal.id_personal,
+                'id_personal': personal.id_personal,
+                'nombre': f"{personal.nombre} {personal.apellidos}".strip() or personal.email,
+                'apellidos': personal.apellidos,
+                'email': personal.email,
+                'matricula': personal.matricula or f"MAT-{personal.id_personal}",
+                'rol': personal.rol,
+                'activo': personal.activo,
+            },
+            'tipo': 'admision' if es_admision else 'box',
+            'fecha': str(fecha_consulta) if fecha_consulta else None,
+            'total': len(tickets_serialized),
+            'tickets': tickets_serialized
         }
 
 
