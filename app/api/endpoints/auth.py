@@ -14,6 +14,7 @@ from app.schemas.user import (
     LoginSerializer,
     PersonalAuthSerializer,
     DesbloqueoManualSerializer,
+    BloqueoManualSerializer,
     EmergencyUnlockSerializer,
 )
 from app.services.auth_service import AuthenticationService
@@ -81,6 +82,38 @@ class DesbloqueoManualView(APIView):
             "usuario": PersonalAuthSerializer(personal_desbloqueado).data
         }, status=status.HTTP_200_OK)
 
+    @extend_schema(request=DesbloqueoManualSerializer, responses={200: PersonalAuthSerializer})
+    def patch(self, request: Request) -> Response:
+        return self.post(request)
+
+
+class BloqueoManualView(APIView):
+    """
+    Bloquea manualmente una cuenta de personal e invalida su acceso asistencial.
+    Exclusivo para roles: Jefa, Admin.
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = BloqueoManualSerializer
+
+    @extend_schema(request=BloqueoManualSerializer, responses={200: PersonalAuthSerializer})
+    def patch(self, request: Request) -> Response:
+        serializer = BloqueoManualSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        personal_bloqueado = AuthenticationService.bloquear_cuenta(
+            id_personal=serializer.validated_data['id_personal'],
+            solicitante=request.user
+        )
+
+        return Response({
+            "mensaje": f"La cuenta de {personal_bloqueado.email} ha sido bloqueada exitosamente.",
+            "usuario": PersonalAuthSerializer(personal_bloqueado).data
+        }, status=status.HTTP_200_OK)
+
+    @extend_schema(request=BloqueoManualSerializer, responses={200: PersonalAuthSerializer})
+    def post(self, request: Request) -> Response:
+        return self.patch(request)
+
 
 class EmergencyUnlockView(APIView):
     """
@@ -112,6 +145,7 @@ urlpatterns = [
     path('login/', LoginView.as_view(), name='login'),
     path('logout/', LogoutView.as_view(), name='logout'),
     path('desbloquear/', DesbloqueoManualView.as_view(), name='desbloqueo-manual'),
+    path('bloquear/', BloqueoManualView.as_view(), name='bloqueo-manual'),
     path('emergency-unlock/', EmergencyUnlockView.as_view(), name='emergency-unlock'),
 ]
 
@@ -119,6 +153,7 @@ __all__ = [
     'LoginView',
     'LogoutView',
     'DesbloqueoManualView',
+    'BloqueoManualView',
     'EmergencyUnlockView',
     'urlpatterns',
 ]

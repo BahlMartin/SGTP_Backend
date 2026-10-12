@@ -275,3 +275,48 @@ class AuthenticationRBACTestCase(TestCase):
             motivo="Extensión pre-turno válida"
         )
         hab_pre.clean()  # No debe lanzar excepción
+
+    def test_bloqueo_manual_por_jefa_y_desbloqueo(self):
+        """La Jefa puede bloquear manualmente a personal de admisión vía PATCH y luego desbloquearlo."""
+        # 1. Bloqueo manual
+        personal_bloqueado = AuthenticationService.bloquear_cuenta(
+            id_personal=self.admision_user.id_personal,
+            solicitante=self.jefa_user
+        )
+        self.assertFalse(personal_bloqueado.activo)
+        self.assertEqual(personal_bloqueado.cant_intentos, 3)
+
+        # Verificar que el usuario no puede iniciar sesión
+        user, err = AuthenticationService.autenticar_personal(self.admision_user.email, 'OperadorPass123!')
+        self.assertIsNone(user)
+        self.assertIn("deshabilitada o bloqueada", err)
+
+        # 2. Desbloqueo manual
+        personal_desbloqueado = AuthenticationService.desbloquear_cuenta(
+            id_personal=self.admision_user.id_personal,
+            solicitante=self.jefa_user
+        )
+        self.assertTrue(personal_desbloqueado.activo)
+        self.assertEqual(personal_desbloqueado.cant_intentos, 0)
+
+        # Ahora el usuario puede autenticarse
+        user, err = AuthenticationService.autenticar_personal(self.admision_user.email, 'OperadorPass123!')
+        self.assertIsNotNone(user)
+        self.assertIsNone(err)
+
+    def test_bloqueo_manual_restricciones_rbac(self):
+        """La Jefa no puede bloquearse a sí misma ni a un Admin."""
+        # Autobloqueo
+        with self.assertRaises(PermissionDenied):
+            AuthenticationService.bloquear_cuenta(
+                id_personal=self.jefa_user.id_personal,
+                solicitante=self.jefa_user
+            )
+
+        # Bloquear a un Admin
+        with self.assertRaises(PermissionDenied):
+            AuthenticationService.bloquear_cuenta(
+                id_personal=self.admin_user.id_personal,
+                solicitante=self.jefa_user
+            )
+

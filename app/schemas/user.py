@@ -23,6 +23,11 @@ class DesbloqueoManualSerializer(serializers.Serializer):
     id_personal = serializers.IntegerField(required=True)
 
 
+class BloqueoManualSerializer(serializers.Serializer):
+    id_personal = serializers.IntegerField(required=True)
+    motivo = serializers.CharField(required=False, allow_blank=True, max_length=250)
+
+
 class DiaLaboralPersonalSerializer(serializers.ModelSerializer):
     dia_nombre = serializers.CharField(source='get_dia_semana_display', read_only=True)
 
