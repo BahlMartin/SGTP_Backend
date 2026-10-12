@@ -133,11 +133,15 @@ class PersonalSerializer(serializers.ModelSerializer):
         return user
 
     def update(self, instance, validated_data):
+        password = validated_data.pop('password', None)
         dias = validated_data.pop('dias_laborales', None)
         instance = super().update(instance, validated_data)
+        if password:
+            instance.set_password(password)
+            instance.save(update_fields=['password'])
         if dias is not None:
             instance.dias_laborales.all().delete()
-            for d in dias:
+            for d in set(dias):
                 DiaLaboralPersonal.objects.create(personal=instance, dia_semana=d)
         return instance
 

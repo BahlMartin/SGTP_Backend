@@ -128,6 +128,7 @@ class AuthenticationService:
             raise PermissionDenied("Solo usuarios con rol 'Admin' o 'Jefa' pueden crear nuevo personal.")
 
         password = datos.pop('password', None)
+        dias_laborales = datos.pop('dias_laborales', [0, 1, 2, 3, 4])
         user = Personal(**datos)
         if password:
             user.set_password(password)
@@ -136,6 +137,13 @@ class AuthenticationService:
 
         user.full_clean()
         user.save()
+
+        # Persistir días laborales asignados
+        if dias_laborales is not None:
+            from app.models.user import DiaLaboralPersonal
+            for d in set(dias_laborales):
+                DiaLaboralPersonal.objects.create(personal=user, dia_semana=d)
+
         return user
 
 
