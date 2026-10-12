@@ -248,96 +248,11 @@ class DiaLaboralPersonal(models.Model):
 
 
 # ==============================================================================
-# MODELO HABILITACIÓN HORARIA
-# ==============================================================================
-
-class HabilitacionHoraria(models.Model):
-    """
-    Permite el ingreso excepcional de personal (Admision, Box, Secretaria)
-    fuera de su franja horaria habitual, previa aprobación de la Jefa o Admin.
-    """
-    id = models.AutoField(primary_key=True)
-    personal = models.ForeignKey(
-        Personal,
-        on_delete=models.CASCADE,
-        related_name='habilitaciones_horarias'
-    )
-    aprobado_por = models.ForeignKey(
-        Personal,
-        on_delete=models.PROTECT,
-        related_name='habilitaciones_otorgadas'
-    )
-    fecha = models.DateField(default=timezone.now)
-    hora_inicio = models.TimeField()
-    hora_fin = models.TimeField()
-    motivo = models.CharField(max_length=255)
-    activa = models.BooleanField(default=True)
-
-    class Meta:
-        db_table = 'sgtp_habilitacion_horaria'
-        verbose_name = 'Habilitación Horaria Excepcional'
-        verbose_name_plural = 'Habilitaciones Horarias Excepcionales'
-        indexes = [
-            models.Index(fields=['personal', 'fecha', 'activa', 'hora_inicio', 'hora_fin'], name='sgtp_hab_idx'),
-        ]
-
-    def __str__(self) -> str:
-        return f"Excepción {self.personal.email} ({self.fecha} {self.hora_inicio}-{self.hora_fin})"
-
-    def clean(self) -> None:
-        """
-        Validaciones de consistencia:
-        1. Solo Jefa o Admin pueden autorizar.
-        2. hora_inicio < hora_fin.
-        3. No superposición con el turno ordinario si la fecha coincide con un día laboral habitual.
-        """
-        super().clean()
-        if self.aprobado_por and self.aprobado_por.rol not in [RolPersonal.JEFA, RolPersonal.ADMIN]:
-            raise ValidationError("Solo una usuaria con rol 'Jefa' o 'Admin' puede autorizar excepciones de turno.")
-        if self.hora_inicio and self.hora_fin and self.hora_inicio >= self.hora_fin:
-            raise ValidationError("La hora de inicio debe ser estrictamente anterior a la hora de fin.")
-
-        if self.personal and self.fecha and self.hora_inicio and self.hora_fin:
-            user = self.personal
-            weekday_num = self.fecha.weekday()
-            es_dia_laboral = user.dias_laborales.filter(dia_semana=weekday_num).exists()
-
-            # Si es día laboral habitual y tiene franja definida, la extensión no puede solaparse con su turno
-            if es_dia_laboral and user.inicio_turno and user.fin_turno:
-                turno_inicio = user.inicio_turno
-                turno_fin = user.fin_turno
-
-                # Caso turno diurno estándar (ej: 08:00 a 16:00)
-                if turno_inicio < turno_fin:
-                    solapa = not (self.hora_fin <= turno_inicio or self.hora_inicio >= turno_fin)
-                    if solapa:
-                        raise ValidationError(
-                            f"Inconsistencia: La extensión horaria ({self.hora_inicio} - {self.hora_fin}) "
-                            f"se solapa con el turno habitual del personal ({turno_inicio} - {turno_fin}). "
-                            "Las horas extras deben ser previas al inicio o posteriores al fin del turno."
-                        )
-
-    def delete(self, using=None, keep_parents: bool = False):
-        """Borrado lógico: marca la habilitación horaria como inactiva."""
-        self.activa = False
-        self.save(update_fields=['activa'])
-        return 1, {self._meta.label: 1}
-
-    def hard_delete(self, using=None, keep_parents: bool = False):
-        """Eliminación física definitiva de la habilitación."""
-        return super().delete(using=using, keep_parents=keep_parents)
-
-    def restore(self) -> None:
-        """Restaura la habilitación horaria."""
-        self.activa = True
-        self.save(update_fields=['activa'])
-
-
-
-
-# ==============================================================================
 # AUDITORÍA Y EXPORTACIONES
 # ==============================================================================
+
+# Re-exportación para retrocompatibilidad
+from app.models.shifts import HabilitacionHoraria, PlanificacionHorasExtras, TipoExtensionChoices
 
 # Alias estándar
 User = Personal
@@ -345,7 +260,6 @@ User = Personal
 # Registro de auditoría inalterable
 auditlog.register(Personal, exclude_fields=['password', 'last_login'])
 auditlog.register(DiaLaboralPersonal)
-auditlog.register(HabilitacionHoraria)
 
 __all__ = [
     'RolPersonal',
@@ -355,4 +269,6 @@ __all__ = [
     'DiaSemanaChoices',
     'DiaLaboralPersonal',
     'HabilitacionHoraria',
+    'PlanificacionHorasExtras',
+    'TipoExtensionChoices',
 ]

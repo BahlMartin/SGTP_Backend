@@ -10,6 +10,7 @@ from app.schemas.user import (
     EmergencyUnlockSerializer,
     EmergencyUnlockSchema,
     HabilitacionHorariaSerializer,
+    PlanificacionHorasExtrasSerializer,
 )
 
 from app.schemas.studies import EstudiosSerializer, ItemSchema, CatalogItemSchema
@@ -37,6 +38,7 @@ __all__ = [
     'EmergencyUnlockSerializer',
     'EmergencyUnlockSchema',
     'HabilitacionHorariaSerializer',
+    'PlanificacionHorasExtrasSerializer',
     'EstudiosSerializer',
     'ItemSchema',
     'CatalogItemSchema',
