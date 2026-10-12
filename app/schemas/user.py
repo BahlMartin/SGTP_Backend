@@ -3,6 +3,7 @@ Serializadores DRF y Esquemas para Autenticación, Gestión de Personal y Turnos
 """
 from typing import Any, Dict
 from django.utils import timezone
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from app.models.user import Personal, HabilitacionHoraria, DiaLaboralPersonal
 from app.core.validators import validar_solo_letras_min2
@@ -52,6 +53,7 @@ class PersonalAuthSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
+    @extend_schema_field(serializers.ListField(child=serializers.IntegerField()))
     def get_dias_laborales_detalle(self, obj):
         return list(obj.dias_laborales.values_list('dia_semana', flat=True))
 
@@ -87,9 +89,11 @@ class PersonalSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id_personal', 'cant_intentos']
 
+    @extend_schema_field(serializers.ListField(child=serializers.IntegerField()))
     def get_dias_laborales_detalle(self, obj):
         return list(obj.dias_laborales.values_list('dia_semana', flat=True))
 
+    @extend_schema_field(serializers.ListField(child=serializers.DictField()))
     def get_habilitaciones_activas_hoy(self, obj):
         hoy = timezone.localdate()
         habilitaciones = obj.habilitaciones_horarias.filter(fecha=hoy, activa=True).order_by('hora_inicio')

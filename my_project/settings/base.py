@@ -219,6 +219,10 @@ SPECTACULAR_SETTINGS = {
     'DESCRIPTION': 'API REST asistencial hospitalaria de alta concurrencia con triage multibox y seguridad FLE/JWE.',
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
+    'ENUM_NAME_OVERRIDES': {
+        'EstadoTicketEnum': 'app.models.ticket.EstadoTicket',
+        'EstadoBoxEnum': 'app.models.box.EstadoBox',
+    },
 }
 
 # ==============================================================================
