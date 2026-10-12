@@ -12,7 +12,9 @@ from rest_framework.permissions import IsAuthenticated
 from app.models.box import (
     Box,
     AsignacionesBox,
+    EstadoBox,
 )
+from app.models.user import RolPersonal
 from app.schemas.box import (
     BoxSerializer,
     AsignacionesBoxSerializer,
@@ -27,9 +29,21 @@ class BoxViewSet(viewsets.ModelViewSet):
     """
     Gestión operativa de Boxes de atención asistencial.
     """
-    queryset = Box.objects.all().order_by('numero')
+    queryset = Box.objects.all().select_related('personal_actual').order_by('numero')
     serializer_class = BoxSerializer
     permission_classes = [IsAuthenticated]
+
+    def perform_update(self, serializer):
+        box = serializer.save()
+        # Si un técnico pone el box en disponible y no tenía personal asignado, vincularlo
+        if box.estado == EstadoBox.DISPONIBLE and self.request.user.is_authenticated:
+            if getattr(self.request.user, 'rol', None) == RolPersonal.BOX and box.personal_actual != self.request.user:
+                box.personal_actual = self.request.user
+                box.save(update_fields=['personal_actual'])
+        # Si se pone fuera de servicio, desasignar al personal
+        elif box.estado == EstadoBox.FUERA_DE_SERVICIO and box.personal_actual is not None:
+            box.personal_actual = None
+            box.save(update_fields=['personal_actual'])
 
     @action(detail=True, methods=['post'], url_path='llamar-siguiente', permission_classes=[IsBoxOrJefa])
     def llamar_siguiente(self, request: Request, pk: str = None) -> Response:
@@ -94,7 +108,7 @@ class BoxViewSet(viewsets.ModelViewSet):
         """
         Monitoreo en tiempo real de todos los boxes para pantallas de sala y supervisión.
         """
-        boxes = Box.objects.all().order_by('numero')
+        boxes = Box.objects.all().select_related('personal_actual').order_by('numero')
         return Response(BoxSerializer(boxes, many=True).data, status=status.HTTP_200_OK)
 
 

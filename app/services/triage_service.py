@@ -128,7 +128,8 @@ class TriageService:
         ticket_seleccionado.save(update_fields=['estado', 'box_actual'])
 
         box.estado = EstadoBox.EN_ATENCION
-        box.save(update_fields=['estado'])
+        box.personal_actual = personal
+        box.save(update_fields=['estado', 'personal_actual'])
 
         # Registro de asignación para auditoría e indicadores de tiempos
         asignacion = AsignacionesBox.objects.create(
