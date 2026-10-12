@@ -2,6 +2,7 @@
 Serializadores DRF y Esquemas para Tickets Asistenciales y Estudios Asociados.
 """
 from typing import Any, Dict
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from app.models.ticket import (
@@ -179,12 +180,13 @@ class TicketHistorialDetailSerializer(TicketDetailSerializer):
             return asignaciones[0] if asignaciones else None
         return obj.asignaciones_historial.select_related('personal', 'box').order_by('-fecha_hora_inicio').first()
 
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_box_numero(self, obj: Ticket):
         asig = self._get_ultima_asignacion(obj)
         if asig and asig.box:
-            return asig.box.numero
+            return str(asig.box.numero)
         if obj.box_actual:
-            return obj.box_actual.numero
+            return str(obj.box_actual.numero)
         return None
 
     def get_personal_box_nombre(self, obj: Ticket) -> str:
@@ -199,6 +201,7 @@ class TicketHistorialDetailSerializer(TicketDetailSerializer):
             return str(asig.personal.matricula)
         return ""
 
+    @extend_schema_field(serializers.DateTimeField(allow_null=True))
     def get_fecha_hora_atencion_box(self, obj: Ticket):
         asig = self._get_ultima_asignacion(obj)
         return asig.fecha_hora_inicio if asig else None

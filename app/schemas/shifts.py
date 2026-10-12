@@ -2,6 +2,7 @@
 Serializadores DRF para Gestión de Turnos, Horas Extras y Planificación Mensual.
 Desacoplado de user.py para garantizar mantenibilidad y responsabilidad única.
 """
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from app.models.shifts import PlanificacionHorasExtras, HabilitacionHoraria
 
@@ -71,7 +72,9 @@ class PlanificacionHorasExtrasSerializer(serializers.ModelSerializer):
             'fecha_creacion'
         ]
         read_only_fields = ['id', 'aprobado_por', 'aprobado_por_email', 'total_horas_mensual', 'fecha_creacion']
+        validators = []  # Permite reemplazar/actualizar la planificación mensual existente en create()
 
+    @extend_schema_field(serializers.ListField(child=serializers.DictField()))
     def get_habilitaciones_diarias_detalle(self, obj):
         return [
             {
