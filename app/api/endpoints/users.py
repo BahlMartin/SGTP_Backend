@@ -81,6 +81,14 @@ class HabilitacionHorariaViewSet(viewsets.ModelViewSet):
         if fecha:
             qs = qs.filter(fecha=fecha)
 
+        anio = self.request.query_params.get('anio')
+        if anio:
+            qs = qs.filter(fecha__year=anio)
+
+        mes = self.request.query_params.get('mes')
+        if mes:
+            qs = qs.filter(fecha__month=mes)
+
         return qs
 
     def perform_create(self, serializer: HabilitacionHorariaSerializer) -> None:
