@@ -218,3 +218,64 @@ class TicketsBoxesEndpointsTestCase(TestCase):
         self.assertEqual(resp_empty.status_code, status.HTTP_200_OK)
         self.assertEqual(len(resp_empty.data['estudios']), 0)
 
+    def test_tickets_por_personal_endpoint(self):
+        """Valida endpoint /app/tickets/personal/<id>/ para admisión y para técnico en box."""
+        # 1. Denegar a usuario sin rol Jefa/Admin
+        self.client.force_authenticate(user=self.box_user)
+        resp_forbid = self.client.get(f'/app/tickets/personal/{self.jefa_user.id_personal}/')
+        self.assertEqual(resp_forbid.status_code, status.HTTP_403_FORBIDDEN)
+
+        # 2. Permitir con rol Jefa
+        self.client.force_authenticate(user=self.jefa_user)
+
+        # Crear operador de admisión
+        admision_user = Personal.objects.create_user(
+            email='admision_test@hospital.local',
+            password='Password123!',
+            nombre='Carlos',
+            apellidos='Gomez',
+            dni=44556677,
+            rol=RolPersonal.ADMISION
+        )
+
+        ticket_adm1 = Ticket.objects.create(
+            num_totem='T-701',
+            paciente=self.paciente,
+            personal_admision=admision_user,
+            clasificacion_triage=ClasificacionTriage.EXTRACCION_CON_TURNO,
+            estado=EstadoTicket.PENDIENTE
+        )
+        ticket_adm2 = Ticket.objects.create(
+            num_totem='T-702',
+            paciente=self.paciente,
+            personal_admision=admision_user,
+            clasificacion_triage=ClasificacionTriage.EXTRACCION_CON_TURNO,
+            estado=EstadoTicket.PENDIENTE
+        )
+
+        # Consultar tickets del operador de admisión
+        resp_adm = self.client.get(f'/app/tickets/personal/{admision_user.id_personal}/')
+        self.assertEqual(resp_adm.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp_adm.data['tipo'], 'admision')
+        self.assertEqual(resp_adm.data['total'], 2)
+        self.assertEqual(len(resp_adm.data['tickets']), 2)
+        # Ordenado del último al menor (ticket_adm2 primero)
+        self.assertEqual(resp_adm.data['tickets'][0]['num_totem'], 'T-702')
+        self.assertEqual(resp_adm.data['tickets'][1]['num_totem'], 'T-701')
+
+        # Crear atención en Box para el técnico box_user
+        from app.models.box import AsignacionesBox
+        asig_box = AsignacionesBox.objects.create(
+            box=self.box1,
+            personal=self.box_user,
+            ticket=ticket_adm1
+        )
+
+        # Consultar tickets del técnico de box
+        resp_box = self.client.get(f'/app/tickets/personal/{self.box_user.id_personal}/')
+        self.assertEqual(resp_box.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp_box.data['tipo'], 'box')
+        self.assertGreaterEqual(resp_box.data['total'], 1)
+        self.assertEqual(resp_box.data['tickets'][0]['num_totem'], 'T-701')
+
+

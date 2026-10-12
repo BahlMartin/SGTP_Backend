@@ -46,6 +46,11 @@ class TicketViewSet(viewsets.ModelViewSet):
     )
     permission_classes = [IsAuthenticated]
 
+    def get_permissions(self):
+        if self.action in ['rendimiento_personal', 'resumen_estudios', 'tickets_por_personal']:
+            return [IsAuthenticated(), IsJefaRole()]
+        return super().get_permissions()
+
     def get_serializer_class(self):
         if self.action in ['create', 'update', 'partial_update']:
             return TicketCreateSerializer
@@ -155,6 +160,39 @@ class TicketViewSet(viewsets.ModelViewSet):
         )
         return Response(datos, status=status.HTTP_200_OK)
 
+    @action(
+        detail=False,
+        methods=['get'],
+        url_path=r'personal/(?P<personal_id>\d+)',
+        permission_classes=[IsAuthenticated, IsJefaRole]
+    )
+    def tickets_por_personal(self, request: Request, personal_id: str = None) -> Response:
+        """
+        Retorna los tickets asistenciales emitidos o atendidos por un integrante del personal.
+        Parámetros opcionales: ?fecha=YYYY-MM-DD, ?tipo=admision|box
+        Permiso exclusivo: Admin y Jefa.
+        """
+        pid = personal_id or request.query_params.get('personal_id')
+        if not pid:
+            return Response(
+                {"detail": "Debe especificar el identificador del personal."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        fecha = validar_formato_fecha(request.query_params.get('fecha'))
+        tipo = request.query_params.get('tipo')
+        try:
+            datos = TicketService.obtener_tickets_por_personal(
+                personal_id=int(pid),
+                fecha_consulta=fecha,
+                tipo=tipo
+            )
+            return Response(datos, status=status.HTTP_200_OK)
+        except Exception as e:
+            from django.core.exceptions import ObjectDoesNotExist
+            if isinstance(e, ObjectDoesNotExist):
+                return Response({"detail": str(e)}, status=status.HTTP_404_NOT_FOUND)
+            raise e
+
 
 app_name = 'tickets_endpoints'
 
@@ -162,6 +200,11 @@ router = DefaultRouter()
 router.register(r'', TicketViewSet, basename='tickets')
 
 urlpatterns = [
+    path(
+        'personal/<int:personal_id>/',
+        TicketViewSet.as_view({'get': 'tickets_por_personal'}, permission_classes=[IsAuthenticated, IsJefaRole]),
+        name='tickets-por-personal'
+    ),
     path('', include(router.urls)),
 ]
 
