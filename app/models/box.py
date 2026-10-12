@@ -50,6 +50,14 @@ class Box(models.Model):
         db_index=True,
         verbose_name="Habilitado para Discapacidad / Movilidad Reducida"
     )
+    personal_actual = models.ForeignKey(
+        'app.Personal',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='boxes_asignados',
+        verbose_name="Personal / Técnico actualmente en el Box"
+    )
 
     class Meta:
         db_table = 'sgtp_box'
