@@ -72,6 +72,33 @@ class AuthenticationService:
         return personal
 
     @classmethod
+    def bloquear_cuenta(
+        cls,
+        id_personal: int,
+        solicitante: Personal
+    ) -> Personal:
+        """
+        Bloqueo manual de cuenta permitido para Jefa y Admin.
+        Aplica jerarquía RBAC: Jefa no puede bloquearse a sí misma ni a Admin/Jefa.
+        """
+        if solicitante.rol not in [RolPersonal.ADMIN, RolPersonal.JEFA]:
+            raise PermissionDenied("No tiene permisos para bloquear cuentas de personal.")
+
+        if solicitante.pk == id_personal:
+            raise PermissionDenied("No puede bloquear su propia cuenta de usuario.")
+
+        try:
+            personal = Personal.objects.get(pk=id_personal)
+        except Personal.DoesNotExist:
+            raise ValidationError(f"Personal con ID {id_personal} no encontrado.")
+
+        if solicitante.rol == RolPersonal.JEFA and personal.rol in [RolPersonal.ADMIN, RolPersonal.JEFA]:
+            raise PermissionDenied("Restricción RBAC: La Jefa no tiene permisos para bloquear cuentas de Administrador o Jefatura.")
+
+        personal.bloquear()
+        return personal
+
+    @classmethod
     def autodesbloqueo_emergencia(
         cls,
         email: str,

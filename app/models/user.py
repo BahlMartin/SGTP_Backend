@@ -176,6 +176,12 @@ class Personal(AbstractBaseUser):
         self.cant_intentos = 0
         self.save(update_fields=['activo', 'cant_intentos'])
 
+    def bloquear(self) -> None:
+        """Bloquea administrativamente al personal fijando intentos al máximo y desactivando la cuenta."""
+        self.activo = False
+        self.cant_intentos = 3
+        self.save(update_fields=['activo', 'cant_intentos'])
+
     def clean(self) -> None:
         """Validaciones de integridad y reglas de negocio del personal."""
         super().clean()
