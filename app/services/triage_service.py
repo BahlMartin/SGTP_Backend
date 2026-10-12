@@ -127,6 +127,9 @@ class TriageService:
         ticket_seleccionado.box_actual = box
         ticket_seleccionado.save(update_fields=['estado', 'box_actual'])
 
+        # Garantizar exclusividad: liberar al personal de cualquier otro box previo
+        Box.objects.filter(personal_actual=personal).exclude(pk=box.pk).update(personal_actual=None)
+
         box.estado = EstadoBox.EN_ATENCION
         box.personal_actual = personal
         box.save(update_fields=['estado', 'personal_actual'])

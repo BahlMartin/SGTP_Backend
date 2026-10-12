@@ -35,15 +35,39 @@ class BoxViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         box = serializer.save()
-        # Si un técnico pone el box en disponible y no tenía personal asignado, vincularlo
+        # Si un técnico pone el box en disponible y no tenía personal asignado, vincularlo liberando otros boxes
         if box.estado == EstadoBox.DISPONIBLE and self.request.user.is_authenticated:
-            if getattr(self.request.user, 'rol', None) == RolPersonal.BOX and box.personal_actual != self.request.user:
-                box.personal_actual = self.request.user
-                box.save(update_fields=['personal_actual'])
+            if getattr(self.request.user, 'rol', None) == RolPersonal.BOX:
+                Box.objects.filter(personal_actual=self.request.user).exclude(pk=box.pk).update(personal_actual=None)
+                if box.personal_actual != self.request.user:
+                    box.personal_actual = self.request.user
+                    box.save(update_fields=['personal_actual'])
         # Si se pone fuera de servicio, desasignar al personal
         elif box.estado == EstadoBox.FUERA_DE_SERVICIO and box.personal_actual is not None:
             box.personal_actual = None
             box.save(update_fields=['personal_actual'])
+
+    @action(detail=True, methods=['post'], url_path='tomar-box', permission_classes=[IsBoxOrJefa])
+    def tomar_box(self, request: Request, pk: str = None) -> Response:
+        """
+        Asigna inmediatamente al técnico solicitante al box físico seleccionado,
+        liberando cualquier otro box previo para garantizar exclusividad 1 a 1.
+        """
+        box = self.get_object()
+        personal = request.user
+
+        # Liberar al personal de cualquier otro box previo
+        Box.objects.filter(personal_actual=personal).exclude(pk=box.pk).update(personal_actual=None)
+
+        box.personal_actual = personal
+        # Si el box estaba fuera de servicio y el técnico se posiciona en él, pasa a Disponible
+        if box.estado == EstadoBox.FUERA_DE_SERVICIO:
+            box.estado = EstadoBox.DISPONIBLE
+            box.save(update_fields=['personal_actual', 'estado'])
+        else:
+            box.save(update_fields=['personal_actual'])
+
+        return Response(BoxSerializer(box).data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'], url_path='llamar-siguiente', permission_classes=[IsBoxOrJefa])
     def llamar_siguiente(self, request: Request, pk: str = None) -> Response:

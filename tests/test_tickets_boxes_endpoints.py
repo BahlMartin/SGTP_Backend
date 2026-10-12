@@ -130,6 +130,26 @@ class TicketsBoxesEndpointsTestCase(TestCase):
         self.assertEqual(asig_resp.status_code, status.HTTP_200_OK)
         self.assertGreaterEqual(len(asig_resp.data), 1)
 
+    def test_tomar_box_exclusividad(self):
+        """Valida que tomar un box asigne al técnico y lo desasigne de cualquier otro box previo."""
+        self.client.force_authenticate(user=self.box_user)
+
+        # 1. Técnico toma Box 1
+        resp1 = self.client.post(f'/app/boxes/{self.box1.id}/tomar-box/')
+        self.assertEqual(resp1.status_code, status.HTTP_200_OK)
+        self.box1.refresh_from_db()
+        self.assertEqual(self.box1.personal_actual, self.box_user)
+
+        # 2. Técnico cambia y toma Box 2
+        resp2 = self.client.post(f'/app/boxes/{self.box2.id}/tomar-box/')
+        self.assertEqual(resp2.status_code, status.HTTP_200_OK)
+        self.box1.refresh_from_db()
+        self.box2.refresh_from_db()
+
+        # Box 1 debe quedar sin personal (None) y Box 2 con el técnico
+        self.assertIsNone(self.box1.personal_actual)
+        self.assertEqual(self.box2.personal_actual, self.box_user)
+
     def test_rendimiento_personal_endpoint(self):
         """Valida endpoint de rendimiento de personal con permisos exclusivos de Jefa/Admin."""
         # 1. Denegar a usuario no autenticado

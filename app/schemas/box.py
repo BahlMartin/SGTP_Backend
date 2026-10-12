@@ -58,7 +58,9 @@ class BoxSerializer(serializers.ModelSerializer):
         # 2. Respaldo por asignación activa en atención
         asig_abierta = obj.asignaciones.filter(fecha_hora_final__isnull=True).select_related('personal').first()
         if asig_abierta and asig_abierta.personal:
-            return PersonalBoxSummarySerializer(asig_abierta.personal).data
+            otro_box_asignado = Box.objects.filter(personal_actual=asig_abierta.personal).exclude(pk=obj.pk).exists()
+            if not otro_box_asignado:
+                return PersonalBoxSummarySerializer(asig_abierta.personal).data
 
         return None
 
