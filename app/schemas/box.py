@@ -51,16 +51,21 @@ class BoxSerializer(serializers.ModelSerializer):
         ]
 
     def get_personal_actual_detalle(self, obj: Box):
+        # Si el box está fuera de servicio, nunca tiene personal operativo
+        if obj.estado == EstadoBox.FUERA_DE_SERVICIO:
+            return None
+
         # 1. Asignación directa persistida en el Box
         if obj.personal_actual:
             return PersonalBoxSummarySerializer(obj.personal_actual).data
 
-        # 2. Respaldo por asignación activa en atención
-        asig_abierta = obj.asignaciones.filter(fecha_hora_final__isnull=True).select_related('personal').first()
-        if asig_abierta and asig_abierta.personal:
-            otro_box_asignado = Box.objects.filter(personal_actual=asig_abierta.personal).exclude(pk=obj.pk).exists()
-            if not otro_box_asignado:
-                return PersonalBoxSummarySerializer(asig_abierta.personal).data
+        # 2. Respaldo ÚNICAMENTE si el box se encuentra activamente en atención
+        if obj.estado == EstadoBox.EN_ATENCION:
+            asig_abierta = obj.asignaciones.filter(fecha_hora_final__isnull=True).select_related('personal').first()
+            if asig_abierta and asig_abierta.personal:
+                otro_box_asignado = Box.objects.filter(personal_actual=asig_abierta.personal).exclude(pk=obj.pk).exists()
+                if not otro_box_asignado:
+                    return PersonalBoxSummarySerializer(asig_abierta.personal).data
 
         return None
 
