@@ -137,7 +137,11 @@ class TicketEstudios(models.Model):
         blank=True,
         default='',
         verbose_name="Observaciones Específicas"
-    )
+    )    
+    motivo_modificacion = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True)
 
     class Meta:
         db_table = 'sgtp_ticket_estudios'
