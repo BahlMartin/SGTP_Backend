@@ -50,13 +50,16 @@ class LoginView(APIView):
 
 
 class LogoutView(APIView):
-    """Cierre de sesión de usuario."""
+    """Cierre de sesión de usuario y liberación de puestos asistenciales."""
     permission_classes = [IsAuthenticated]
 
     @extend_schema(request=None, responses={200: dict})
     def post(self, request: Request) -> Response:
+        from app.services.triage_service import TriageService
+        TriageService.liberar_boxes_de_personal(request.user)
         logout(request)
         return Response({"mensaje": "Sesión finalizada correctamente."}, status=status.HTTP_200_OK)
+
 
 
 class DesbloqueoManualView(APIView):

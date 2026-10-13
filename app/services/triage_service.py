@@ -194,6 +194,41 @@ class TriageService:
 
         return asignacion
 
+    @classmethod
+    @transaction.atomic
+    def liberar_boxes_de_personal(cls, personal: Optional[Personal]) -> int:
+        """
+        Libera todos los boxes asociados al personal al momento del logout.
+        - Cierra atenciones en curso abiertas si existieran.
+        - Desasigna el personal (personal_actual = None).
+        - Deja el estado del box en 'Disponible'.
+        """
+        if not personal or not getattr(personal, 'is_authenticated', False):
+            return 0
+
+        boxes_afectados = Box.objects.select_for_update().filter(personal_actual=personal)
+        ahora = timezone.now()
+
+        for box in boxes_afectados:
+            # Cerrar asignaciones abiertas si quedaron pendientes
+            asig_abierta = box.asignaciones.select_for_update().filter(fecha_hora_final__isnull=True).first()
+            if asig_abierta:
+                asig_abierta.fecha_hora_final = ahora
+                asig_abierta.motivo_cierre = MotivoCierreBox.CANCELADO
+                asig_abierta.save(update_fields=['fecha_hora_final', 'motivo_cierre'])
+
+                if asig_abierta.ticket:
+                    asig_abierta.ticket.box_actual = None
+                    asig_abierta.ticket.estado = EstadoTicket.CANCELADO
+                    asig_abierta.ticket.save(update_fields=['box_actual', 'estado'])
+
+            box.personal_actual = None
+            box.estado = EstadoBox.DISPONIBLE
+            box.save(update_fields=['personal_actual', 'estado'])
+
+        return boxes_afectados.count()
+
+
 
 from app.services.ticket_service import TicketService
 

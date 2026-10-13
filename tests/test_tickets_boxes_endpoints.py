@@ -278,4 +278,42 @@ class TicketsBoxesEndpointsTestCase(TestCase):
         self.assertGreaterEqual(resp_box.data['total'], 1)
         self.assertEqual(resp_box.data['tickets'][0]['num_totem'], 'T-701')
 
+    def test_logout_libera_box_y_mantiene_estado_disponible(self):
+        """
+        Al cerrar sesión el usuario asignado al box:
+        - Box.personal_actual pasa a None.
+        - Box.estado permanece/pasa a 'Disponible'.
+        - El endpoint GET /app/boxes/ retorna personal_actual=null y personal_actual_detalle=null.
+        """
+        # Asignar técnico al box 1
+        self.box1.personal_actual = self.box_user
+        self.box1.estado = EstadoBox.DISPONIBLE
+        self.box1.save(update_fields=['personal_actual', 'estado'])
+
+        self.client.force_authenticate(user=self.box_user)
+
+        # Verificar que antes del logout el box tiene asignado al usuario
+        resp_pre = self.client.get(f'/app/boxes/{self.box1.id}/')
+        self.assertEqual(resp_pre.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp_pre.data['personal_actual'], self.box_user.id_personal)
+        self.assertIsNotNone(resp_pre.data['personal_actual_detalle'])
+
+        # Ejecutar logout
+        resp_logout = self.client.post('/app/auth/logout/')
+        self.assertEqual(resp_logout.status_code, status.HTTP_200_OK)
+
+        # Refrescar box desde BD
+        self.box1.refresh_from_db()
+        self.assertIsNone(self.box1.personal_actual)
+        self.assertEqual(self.box1.estado, EstadoBox.DISPONIBLE)
+
+        # Verificar que el endpoint de boxes devuelve personal_actual en null
+        self.client.force_authenticate(user=self.jefa_user)
+        resp_post = self.client.get(f'/app/boxes/{self.box1.id}/')
+        self.assertEqual(resp_post.status_code, status.HTTP_200_OK)
+        self.assertIsNone(resp_post.data['personal_actual'])
+        self.assertIsNone(resp_post.data['personal_actual_detalle'])
+        self.assertEqual(resp_post.data['estado'], EstadoBox.DISPONIBLE)
+
+
 
