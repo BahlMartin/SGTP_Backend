@@ -18,6 +18,8 @@ from app.services.patient_service import PatientService
 
 class TicketEstudiosSerializer(serializers.ModelSerializer):
     estudio_detalle = EstudiosSerializer(source='estudio', read_only=True)
+    modificado_por_nombre = serializers.SerializerMethodField()
+    asignacion_box_id = serializers.ReadOnlyField(source='asignacion_box.id')
 
     class Meta:
         model = TicketEstudios
@@ -26,8 +28,18 @@ class TicketEstudiosSerializer(serializers.ModelSerializer):
             'estudio',
             'estudio_detalle',
             'estado',
+            'origen',
+            'asignacion_box_id',
+            'motivo_modificacion',
+            'modificado_por_nombre',
+            'fecha_hora_modificacion',
             'observaciones',
         ]
+
+    def get_modificado_por_nombre(self, obj: TicketEstudios) -> str:
+        if obj.modificado_por:
+            return f"{obj.modificado_por.apellidos}, {obj.modificado_por.nombre}"
+        return ""
 
 
 class TicketCreateSerializer(serializers.ModelSerializer):

@@ -10,7 +10,7 @@ from django.utils import timezone
 from django.core.exceptions import ValidationError, PermissionDenied, ObjectDoesNotExist
 
 from app.models.user import Personal, RolPersonal
-from app.models.ticket import Ticket, TicketEstudios
+from app.models.ticket import Ticket, TicketEstudios, EstadoEstudio
 from app.models.box import AsignacionesBox, MotivoCierreBox
 
 
@@ -160,6 +160,8 @@ class TicketService:
         qs = TicketEstudios.objects.filter(
             ticket__fecha_hora_admision__range=(inicio_dia, fin_dia),
             ticket__is_deleted=False
+        ).exclude(
+            estado=EstadoEstudio.CANCELADO
         )
 
         total_estudios_realizados = qs.count()

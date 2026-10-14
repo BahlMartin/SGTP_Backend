@@ -18,9 +18,13 @@ from app.models.box import (
 )
 from app.models.ticket import (
     Ticket,
+    TicketEstudios,
+    OrigenEstudio,
+    EstadoEstudio,
     EstadoTicket,
     ClasificacionTriage,
 )
+from app.models.studies import Estudios
 
 # Prioridad médica ordenada de mayor a menor peso asistencial
 ORDEN_PRIORIDAD_TRIAGE = [
@@ -193,6 +197,151 @@ class TriageService:
             raise ValidationError(f"No existía una atención activa abierta para el Box {box.numero}.")
 
         return asignacion
+
+    @classmethod
+    @transaction.atomic
+    def modificar_estudios_atencion(
+        cls,
+        box_id: int,
+        personal: Personal,
+        cancelar_estudios: Optional[list] = None,
+        agregar_estudios: Optional[list] = None,
+    ) -> Ticket:
+        """
+        Modifica los estudios asignados a un ticket durante la atención en Box:
+        - Cancela estudios cargados por error registrando motivo, técnico y sesión en AsignacionesBox.
+        - Agrega estudios solicitados en la orden física con origen='box'.
+        - Garantiza que el ticket conserve al menos un estudio activo.
+        - Requiere que el Box esté 'En atencion' y el usuario sea el técnico a cargo o Jefa/Admin.
+        """
+        cancelar_estudios = cancelar_estudios or []
+        agregar_estudios = agregar_estudios or []
+
+        try:
+            box = Box.objects.select_for_update().get(pk=box_id)
+        except Box.DoesNotExist:
+            raise ValidationError(f"Box con ID {box_id} no encontrado.")
+
+        if box.estado != EstadoBox.EN_ATENCION:
+            raise ValidationError(
+                f"El Box {box.numero} no se encuentra en atención activa. No se pueden modificar estudios."
+            )
+
+        # Validación de permisos: técnico a cargo del Box o rol Jefa/Admin
+        es_jefa_o_admin = getattr(personal, 'rol', None) in [RolPersonal.JEFA, RolPersonal.ADMIN] or getattr(personal, 'is_superuser', False)
+        if not es_jefa_o_admin and box.personal_actual_id != personal.pk:
+            raise PermissionDenied(
+                f"No está autorizado a modificar estudios del Box {box.numero}. "
+                "Solo el profesional a cargo o la Jefa de Laboratorio pueden realizar esta acción."
+            )
+
+        # Buscar la asignación activa abierta
+        asignacion = (
+            AsignacionesBox.objects.select_for_update()
+            .filter(box=box, fecha_hora_final__isnull=True)
+            .order_by('-fecha_hora_inicio')
+            .first()
+        )
+
+        if not asignacion or not asignacion.ticket:
+            raise ValidationError(
+                f"No se encontró una atención activa con ticket asociado para el Box {box.numero}."
+            )
+
+        ticket = Ticket.objects.select_for_update().get(pk=asignacion.ticket.pk, is_deleted=False)
+        ahora = timezone.now()
+
+        # 1. Procesar cancelaciones
+        for item in cancelar_estudios:
+            estudio_id = item.get('estudio_id') if isinstance(item, dict) else item
+            motivo = item.get('motivo', '').strip() if isinstance(item, dict) else ''
+
+            if not motivo:
+                motivo = "Cancelado en box por indicación u orden física"
+
+            ticket_estudio = (
+                TicketEstudios.objects.select_for_update()
+                .filter(ticket=ticket, estudio_id=estudio_id)
+                .exclude(estado=EstadoEstudio.CANCELADO)
+                .first()
+            )
+
+            if ticket_estudio:
+                ticket_estudio.estado = EstadoEstudio.CANCELADO
+                ticket_estudio.asignacion_box = asignacion
+                ticket_estudio.modificado_por = personal
+                ticket_estudio.motivo_modificacion = motivo
+                ticket_estudio.fecha_hora_modificacion = ahora
+                ticket_estudio.save(
+                    update_fields=[
+                        'estado',
+                        'asignacion_box',
+                        'modificado_por',
+                        'motivo_modificacion',
+                        'fecha_hora_modificacion',
+                    ]
+                )
+
+        # 2. Procesar adiciones
+        for item in agregar_estudios:
+            estudio_id = item.get('estudio_id') if isinstance(item, dict) else item
+            motivo = item.get('motivo', '').strip() if isinstance(item, dict) else ''
+
+            if not motivo:
+                motivo = "Agregado en box por indicación en orden física"
+
+            try:
+                estudio = Estudios.objects.get(pk=estudio_id, activo=True)
+            except Estudios.DoesNotExist:
+                raise ValidationError(f"El estudio con ID {estudio_id} no existe o se encuentra inactivo.")
+
+            ticket_estudio_existente = (
+                TicketEstudios.objects.select_for_update()
+                .filter(ticket=ticket, estudio=estudio)
+                .first()
+            )
+
+            if ticket_estudio_existente:
+                # Si ya existía pero estaba cancelado, reactivarlo
+                ticket_estudio_existente.estado = EstadoEstudio.SOLICITADO
+                ticket_estudio_existente.origen = OrigenEstudio.BOX
+                ticket_estudio_existente.asignacion_box = asignacion
+                ticket_estudio_existente.modificado_por = personal
+                ticket_estudio_existente.motivo_modificacion = motivo
+                ticket_estudio_existente.fecha_hora_modificacion = ahora
+                ticket_estudio_existente.save(
+                    update_fields=[
+                        'estado',
+                        'origen',
+                        'asignacion_box',
+                        'modificado_por',
+                        'motivo_modificacion',
+                        'fecha_hora_modificacion',
+                    ]
+                )
+            else:
+                TicketEstudios.objects.create(
+                    ticket=ticket,
+                    estudio=estudio,
+                    estado=EstadoEstudio.SOLICITADO,
+                    origen=OrigenEstudio.BOX,
+                    asignacion_box=asignacion,
+                    modificado_por=personal,
+                    motivo_modificacion=motivo,
+                    fecha_hora_modificacion=ahora,
+                )
+
+        # 3. Validación de integridad: el ticket debe tener al menos un estudio activo
+        estudios_activos_count = (
+            ticket.estudios.exclude(estado=EstadoEstudio.CANCELADO).count()
+        )
+        if estudios_activos_count == 0:
+            raise ValidationError(
+                "Operación rechazada: El ticket debe conservar al menos un estudio clínico activo. "
+                "Si la orden médica debe anularse en su totalidad, cancele la atención del box."
+            )
+
+        return ticket
 
     @classmethod
     @transaction.atomic

@@ -19,6 +19,7 @@ from app.schemas.box import (
     BoxSerializer,
     AsignacionesBoxSerializer,
     CerrarAtencionSerializer,
+    ModificarEstudiosBoxSerializer,
 )
 from app.schemas.ticket import TicketDetailSerializer
 from app.services.triage_service import TriageService
@@ -97,6 +98,37 @@ class BoxViewSet(viewsets.ModelViewSet):
                 "mensaje": f"Paciente llamado con éxito al Box {box.numero}.",
                 "ticket": TicketDetailSerializer(ticket).data,
                 "asignacion_id": asignacion.id if asignacion else None
+            },
+            status=status.HTTP_200_OK
+        )
+
+    @action(detail=True, methods=['post'], url_path='modificar-estudios', permission_classes=[IsBoxOrJefa])
+    def modificar_estudios(self, request: Request, pk: str = None) -> Response:
+        """
+        Modifica los estudios de la orden médica durante la atención en Box:
+        - Cancela estudios erróneos con motivo y auditoría.
+        - Agrega nuevos estudios solicitados.
+        """
+        box = self.get_object()
+        serializer = ModificarEstudiosBoxSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        try:
+            ticket = TriageService.modificar_estudios_atencion(
+                box_id=box.id,
+                personal=request.user,
+                cancelar_estudios=serializer.validated_data.get('cancelar_estudios', []),
+                agregar_estudios=serializer.validated_data.get('agregar_estudios', []),
+            )
+        except DjangoValidationError as e:
+            detail_msg = e.messages[0] if hasattr(e, 'messages') and e.messages else str(e)
+            return Response({"detail": detail_msg}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(
+            {
+                "mensaje": f"Estudios del ticket actualizados correctamente en Box {box.numero}.",
+                "ticket": TicketDetailSerializer(ticket).data,
             },
             status=status.HTTP_200_OK
         )
