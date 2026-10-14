@@ -110,6 +110,17 @@ class Ticket(SoftDeleteModel):
         return f"Ticket {self.num_totem} ({self.clasificacion_triage}) - [{self.estado}]"
 
 
+class OrigenEstudio(models.TextChoices):
+    ADMISION = 'admision', 'Ingresado en Admisión'
+    BOX = 'box', 'Agregado en Box de Extracción'
+
+
+class EstadoEstudio(models.TextChoices):
+    SOLICITADO = 'Solicitado', 'Solicitado / Pendiente de Toma'
+    REALIZADO = 'Realizado', 'Muestra Tomada'
+    CANCELADO = 'Cancelado', 'Cancelado / No Requerido'
+
+
 class TicketEstudios(models.Model):
     """
     Relación N:M entre un Ticket y los Estudios solicitados en dicha orden asistencial.
@@ -129,8 +140,43 @@ class TicketEstudios(models.Model):
     )
     estado = models.CharField(
         max_length=50,
-        default='Solicitado',
+        choices=EstadoEstudio.choices,
+        default=EstadoEstudio.SOLICITADO,
         verbose_name="Estado de la Práctica"
+    )
+    origen = models.CharField(
+        max_length=20,
+        choices=OrigenEstudio.choices,
+        default=OrigenEstudio.ADMISION,
+        verbose_name="Origen de Carga del Estudio"
+    )
+    asignacion_box = models.ForeignKey(
+        'app.AsignacionesBox',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='estudios_modificados',
+        verbose_name="Atención en Box que modificó o agregó la práctica"
+    )
+    motivo_modificacion = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        null=True,
+        verbose_name="Motivo de Modificación / Cancelación en Box"
+    )
+    modificado_por = models.ForeignKey(
+        Personal,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='estudios_ticket_modificados',
+        verbose_name="Personal que realizó la modificación"
+    )
+    fecha_hora_modificacion = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Fecha y Hora de la Modificación (UTC)"
     )
     observaciones = models.CharField(
         max_length=255,
@@ -138,10 +184,6 @@ class TicketEstudios(models.Model):
         default='',
         verbose_name="Observaciones Específicas"
     )    
-    motivo_modificacion = models.CharField(
-        max_length=255,
-        null=True,
-        blank=True)
 
     class Meta:
         db_table = 'sgtp_ticket_estudios'
@@ -160,6 +202,8 @@ auditlog.register(TicketEstudios)
 __all__ = [
     'EstadoTicket',
     'ClasificacionTriage',
+    'OrigenEstudio',
+    'EstadoEstudio',
     'Ticket',
     'TicketEstudios',
 ]

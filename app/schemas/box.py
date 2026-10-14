@@ -114,8 +114,26 @@ class CerrarAtencionSerializer(serializers.Serializer):
     )
 
 
+class ItemCancelarEstudioSerializer(serializers.Serializer):
+    estudio_id = serializers.IntegerField(required=True)
+    motivo = serializers.CharField(max_length=255, required=False, allow_blank=True, default='')
+
+
+class ItemAgregarEstudioSerializer(serializers.Serializer):
+    estudio_id = serializers.IntegerField(required=True)
+    motivo = serializers.CharField(max_length=255, required=False, allow_blank=True, default='')
+
+
+class ModificarEstudiosBoxSerializer(serializers.Serializer):
+    cancelar_estudios = ItemCancelarEstudioSerializer(many=True, required=False, default=list)
+    agregar_estudios = ItemAgregarEstudioSerializer(many=True, required=False, default=list)
+
+
 __all__ = [
     'BoxSerializer',
     'AsignacionesBoxSerializer',
     'CerrarAtencionSerializer',
+    'ItemCancelarEstudioSerializer',
+    'ItemAgregarEstudioSerializer',
+    'ModificarEstudiosBoxSerializer',
 ]
