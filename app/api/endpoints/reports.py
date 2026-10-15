@@ -17,6 +17,9 @@ from app.services.reports.report_facade import ReportFacade
 from app.core.permissions import IsSecretariaOrJefa, IsJefaRole
 from app.core.validators import validar_formato_fecha
 
+from rest_framework.permissions import IsAuthenticated
+from app.core.permissions import IsSecretariaOrJefa # Importas este permiso
+
 PARAMETRO_FECHA_CONSULTA = OpenApiParameter(
     'fecha',
     str,
@@ -64,13 +67,14 @@ class DescargarReportePdfView(APIView):
 class DispararEnvioReporteView(APIView):
     """
     Dispara manualmente el proceso de consolidación, compilación y despacho por correo SMTP.
-    Exclusivo para usuarias con rol Jefa o Administrador.
+    Permitido para Secretaría, Jefa o Administrador.
     """
-    permission_classes = [IsAuthenticated, IsJefaRole]
+    permission_classes = [IsAuthenticated, IsSecretariaOrJefa] # <--- CAMBIO REALIZADO
     serializer_class = DispararReporteRequestSerializer
 
     @extend_schema(request=DispararReporteRequestSerializer, responses={200: HistorialReporteDiarioSerializer})
     def post(self, request: Request) -> Response:
+
         user = request.user
         email_destinatario = getattr(user, 'email', None) if (user and user.is_authenticated) else None
 
@@ -103,7 +107,6 @@ class DispararEnvioReporteView(APIView):
             },
             status=status.HTTP_200_OK if historial.exitoso else status.HTTP_500_INTERNAL_SERVER_ERROR
         )
-
 
 class HistorialReportesViewSet(viewsets.ReadOnlyModelViewSet):
     """
