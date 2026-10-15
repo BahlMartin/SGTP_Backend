@@ -315,5 +315,57 @@ class TicketsBoxesEndpointsTestCase(TestCase):
         self.assertIsNone(resp_post.data['personal_actual_detalle'])
         self.assertEqual(resp_post.data['estado'], EstadoBox.DISPONIBLE)
 
+    def test_llamar_paciente_especifico_ignora_triage(self):
+        """
+        Valida que enviar 'ticket_id' al endpoint llamar-siguiente:
+        1. Convoque al ticket solicitado ignorando el orden prioritario de triage.
+        2. Pase el ticket y el box a 'En atencion'.
+        3. Falla con 400 si el box ya está ocupado.
+        """
+        self.client.force_authenticate(user=self.box_user)
+
+        # Crear Ticket A con alta prioridad (Guardia)
+        ticket_guardia = Ticket.objects.create(
+            num_totem='G-10',
+            paciente=self.paciente,
+            personal_admision=self.jefa_user,
+            clasificacion_triage=ClasificacionTriage.GUARDIA,
+            estado=EstadoTicket.PENDIENTE
+        )
+
+        # Crear Ticket B con menor prioridad (Extracción con turno)
+        ticket_rutina = Ticket.objects.create(
+            num_totem='EXT-101',
+            paciente=self.paciente,
+            personal_admision=self.jefa_user,
+            clasificacion_triage=ClasificacionTriage.EXTRACCION_CON_TURNO,
+            estado=EstadoTicket.PENDIENTE
+        )
+
+        # Llamar directamente a ticket_rutina pasando ticket_id
+        payload = {'ticket_id': ticket_rutina.pk}
+        resp = self.client.post(
+            f'/app/boxes/{self.box2.id}/llamar-siguiente/',
+            data=payload,
+            format='json'
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['ticket']['id_ticket'], str(ticket_rutina.id_ticket))
+
+        # Verificar estados
+        ticket_rutina.refresh_from_db()
+        ticket_guardia.refresh_from_db()
+        self.assertEqual(ticket_rutina.estado, EstadoTicket.EN_ATENCION)
+        self.assertEqual(ticket_rutina.box_actual, self.box2)
+        self.assertEqual(ticket_guardia.estado, EstadoTicket.PENDIENTE)
+
+        # Intentar llamar al ticket_guardia mientras el box2 sigue en atención debe retornar 400
+        resp_bloqueado = self.client.post(
+            f'/app/boxes/{self.box2.id}/llamar-siguiente/',
+            data={'ticket_id': ticket_guardia.pk},
+            format='json'
+        )
+        self.assertEqual(resp_bloqueado.status_code, status.HTTP_400_BAD_REQUEST)
+
 
 
