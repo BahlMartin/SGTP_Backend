@@ -3,7 +3,7 @@ Capa de Servicios de Triage y Despacho Asistencial Multibox.
 Implementa el algoritmo estricto de priorización asistencial, despacho de Box 1 vs Boxes estándar,
 concurrencia atómica con select_for_update(skip_locked=True) y ventana de inmutabilidad de 24h.
 """
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, Union
 from datetime import timedelta
 from django.db import transaction, models
 from django.utils import timezone
@@ -60,16 +60,17 @@ class TriageService:
     def llamar_siguiente_paciente(
         cls,
         box_id: int,
-        personal: Personal
+        personal: Personal,
+        ticket_id: Optional[Union[int, str]] = None
     ) -> Tuple[Optional[Ticket], Optional[AsignacionesBox]]:
         """
-        Llama al siguiente paciente disponible según las reglas de asignación multibox:
+        Llama al siguiente paciente disponible según las reglas de asignación multibox,
+        o convoca inmediatamente al ticket especificado si se proporciona ticket_id (llamado directo ignorando triage):
         1. Bloquea el Box con select_for_update para evitar dobles llamadas concurrentes.
-        2. Si el Box tiene discapacidad=True (Box 1):
-           - Busca primero tickets 'Pendiente' con triage 'discapacidad' (FIFO por llegada).
-           - Si no hay, atiende la cola general ordenada por prioridad médica y fecha de llegada.
-        3. Si el Box es estándar (Boxes 2..N, discapacidad=False):
-           - Atiende la cola general excluyendo estrictamente los tickets con triage 'discapacidad'.
+        2. Si ticket_id fue provisto, bloquea y selecciona ese ticket directamente si está PENDIENTE.
+        3. Si ticket_id es None:
+           - Si el Box tiene discapacidad=True (Box 1): prioriza Discapacidad y luego cola general.
+           - Si el Box es estándar (Boxes 2..N): cola general excluyendo Discapacidad.
         4. Bloquea el Ticket seleccionado con select_for_update(skip_locked=True) para
            garantizar exclusión mutua en ambientes de alta concurrencia.
         5. Actualiza estados de Box y Ticket a 'En Atencion' y crea el registro en AsignacionesBox.
@@ -86,41 +87,53 @@ class TriageService:
 
         ticket_seleccionado: Optional[Ticket] = None
 
-        orden_medico = construir_orden_prioridad_case()
-
-        if box.discapacidad:
-            # Box 1: Prioridad absoluta para pacientes con Discapacidad / Movilidad Reducida
-            cola_discapacidad = (
-                Ticket.objects.select_for_update(skip_locked=True)
-                .filter(
-                    estado=EstadoTicket.PENDIENTE,
-                    clasificacion_triage=ClasificacionTriage.DISCAPACIDAD,
-                    is_deleted=False
+        if ticket_id is not None:
+            # Llamado directo e inmediato forzado desde el box (ignora algoritmo de triage)
+            try:
+                ticket_seleccionado = (
+                    Ticket.objects.select_for_update(skip_locked=True)
+                    .get(pk=ticket_id, estado=EstadoTicket.PENDIENTE, is_deleted=False)
                 )
-                .order_by('fecha_hora_admision')
-            )
-            ticket_seleccionado = cola_discapacidad.first()
+            except Ticket.DoesNotExist:
+                raise ValidationError(
+                    f"El ticket seleccionado ya no se encuentra en espera o ya está siendo atendido."
+                )
+        else:
+            orden_medico = construir_orden_prioridad_case()
 
-            # Si no hay pacientes con discapacidad, atiende la cola general
-            if not ticket_seleccionado:
-                cola_general = (
+            if box.discapacidad:
+                # Box 1: Prioridad absoluta para pacientes con Discapacidad / Movilidad Reducida
+                cola_discapacidad = (
+                    Ticket.objects.select_for_update(skip_locked=True)
+                    .filter(
+                        estado=EstadoTicket.PENDIENTE,
+                        clasificacion_triage=ClasificacionTriage.DISCAPACIDAD,
+                        is_deleted=False
+                    )
+                    .order_by('fecha_hora_admision')
+                )
+                ticket_seleccionado = cola_discapacidad.first()
+
+                # Si no hay pacientes con discapacidad, atiende la cola general
+                if not ticket_seleccionado:
+                    cola_general = (
+                        Ticket.objects.select_for_update(skip_locked=True)
+                        .filter(estado=EstadoTicket.PENDIENTE, is_deleted=False)
+                        .annotate(prioridad_peso=orden_medico)
+                        .order_by('prioridad_peso', 'fecha_hora_admision')
+                    )
+                    ticket_seleccionado = cola_general.first()
+
+            else:
+                # Boxes 2..N: Cola general EXCLUYENDO estrictamente tickets de discapacidad
+                cola_estandar = (
                     Ticket.objects.select_for_update(skip_locked=True)
                     .filter(estado=EstadoTicket.PENDIENTE, is_deleted=False)
+                    .exclude(clasificacion_triage=ClasificacionTriage.DISCAPACIDAD)
                     .annotate(prioridad_peso=orden_medico)
                     .order_by('prioridad_peso', 'fecha_hora_admision')
                 )
-                ticket_seleccionado = cola_general.first()
-
-        else:
-            # Boxes 2..N: Cola general EXCLUYENDO estrictamente tickets de discapacidad
-            cola_estandar = (
-                Ticket.objects.select_for_update(skip_locked=True)
-                .filter(estado=EstadoTicket.PENDIENTE, is_deleted=False)
-                .exclude(clasificacion_triage=ClasificacionTriage.DISCAPACIDAD)
-                .annotate(prioridad_peso=orden_medico)
-                .order_by('prioridad_peso', 'fecha_hora_admision')
-            )
-            ticket_seleccionado = cola_estandar.first()
+                ticket_seleccionado = cola_estandar.first()
 
         if not ticket_seleccionado:
             # No hay pacientes en cola de espera para este box
