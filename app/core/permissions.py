@@ -34,7 +34,8 @@ class IsAdmisionOrJefa(permissions.BasePermission):
             RolPersonal.ADMIN, 
             RolPersonal.JEFA, 
             RolPersonal.ADMISION, 
-            RolPersonal.BOX
+            RolPersonal.BOX,
+            RolPersonal.SECRETARIA 
         ])
 
 
