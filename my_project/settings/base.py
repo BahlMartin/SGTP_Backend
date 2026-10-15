@@ -79,7 +79,6 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
 # 2. APLICACIONES REGISTRADAS
 # ==============================================================================
 DJANGO_APPS = [
-    'daphne',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
@@ -92,7 +91,6 @@ THIRD_PARTY_APPS = [
     'corsheaders',
     'auditlog',
     'drf_spectacular',
-    'channels',
 ]
 
 LOCAL_APPS = [
@@ -236,16 +234,6 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
-
-# Channels Layer (Redis) para WebSockets en tiempo real
-CHANNEL_LAYERS = {
-    'default': {
-        'BACKEND': 'channels_redis.core.RedisChannelLayer',
-        'CONFIG': {
-            'hosts': [env('CELERY_BROKER_URL', default='redis://127.0.0.1:6379/1')],
-        },
-    },
-}
 
 # ==============================================================================
 # 10. NOTIFICACIONES Y SERVIDOR SMTP

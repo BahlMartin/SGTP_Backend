@@ -6,7 +6,7 @@ services:
     region: oregon
     plan: free
     buildCommand: "./build.sh"
-    startCommand: "daphne -b 0.0.0.0 -p $PORT my_project.asgi:application"
+    startCommand: "gunicorn my_project.wsgi:application"
     envVars:
       - key: DJANGO_DEBUG
         value: "False"
