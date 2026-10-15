@@ -8,6 +8,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.routers import DefaultRouter
 from rest_framework.permissions import IsAuthenticated
+from django.core.exceptions import ValidationError as DjangoValidationError
 
 from app.models.box import (
     Box,
@@ -73,15 +74,23 @@ class BoxViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='llamar-siguiente', permission_classes=[IsBoxOrJefa])
     def llamar_siguiente(self, request: Request, pk: str = None) -> Response:
         """
-        Llama al siguiente paciente disponible según el algoritmo multibox:
+        Llama al siguiente paciente disponible según el algoritmo multibox,
+        o convoca directamente a un paciente específico si se envía 'ticket_id' (ignorando triage).
         Box 1 prioriza Discapacidad; Boxes 2..N excluyen Discapacidad.
         Ejecución atómica con select_for_update(skip_locked=True).
         """
         box = self.get_object()
-        ticket, asignacion = TriageService.llamar_siguiente_paciente(
-            box_id=box.id,
-            personal=request.user
-        )
+        ticket_id = request.data.get('ticket_id') if isinstance(request.data, dict) else None
+        
+        try:
+            ticket, asignacion = TriageService.llamar_siguiente_paciente(
+                box_id=box.id,
+                personal=request.user,
+                ticket_id=ticket_id
+            )
+        except DjangoValidationError as e:
+            detail_msg = e.messages[0] if hasattr(e, 'messages') and e.messages else str(e)
+            return Response({"detail": detail_msg}, status=status.HTTP_400_BAD_REQUEST)
 
         if not ticket:
             return Response(
