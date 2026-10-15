@@ -12,17 +12,33 @@ from app.schemas.user import PersonalSerializer, HabilitacionHorariaSerializer, 
 from app.services.auth_service import AuthenticationService
 from app.core.permissions import JerarquiaCreacionPersonalPermission, IsJefaRole
 
+from rest_framework.permissions import IsAuthenticated
+from app.core.permissions import IsJefaRole, IsSecretariaOrJefa, IsAdminRole 
+from app.core.permissions import JerarquiaCreacionPersonalPermission, IsSecretariaOrJefa
+
 
 class PersonalViewSet(viewsets.ModelViewSet):
     """
     Gestión de Personal Hospitalario con jerarquía estricta RBAC:
     - Jefa solo puede gestionar Admisión, Box y Secretaría.
     - Admin puede gestionar todas las cuentas.
-    Implementa borrado lógico (Soft-Delete) preservando trazabilidad y auditoría.
+    - Secretaría puede consultar el listado.
     """
     queryset = Personal.objects.filter(activo=True).order_by('apellidos', 'nombre')
     serializer_class = PersonalSerializer
-    permission_classes = [JerarquiaCreacionPersonalPermission]
+
+    def get_permissions(self):
+        """
+        Sobrescribe los permisos por defecto para dar acceso de solo lectura a Secretaría.
+        """
+        if self.action in ['list', 'retrieve']:
+            # Secretaría, Jefa o Admin pueden ver la lista o detalles de usuarios
+            permission_classes = [IsAuthenticated, IsSecretariaOrJefa]
+        else:
+            # Para crear, actualizar o eliminar, se mantiene la restricción estricta
+            permission_classes = [IsAuthenticated, JerarquiaCreacionPersonalPermission]
+        
+        return [permission() for permission in permission_classes]
 
     def get_queryset(self):
         if self.action == 'reactivar':
