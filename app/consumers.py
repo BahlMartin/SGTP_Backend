@@ -71,3 +71,55 @@ class BoxStatusConsumer(BaseHospitalConsumer):
                 await self.send(text_data=json.dumps({'type': 'pong'}))
         except Exception as e:
             logger.warning(f"[BoxStatusConsumer] Error procesando mensaje de entrada: {e}")
+
+# Añado varias clases consumidoras para actualizaciones en tiempo real
+class QueueEventsConsumer(BaseHospitalConsumer):
+    """
+    Transmite la cola multibox centralizada.
+    Ideal para las pantallas de las salas de espera.
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.group_name = 'sgtp_queue_live'
+
+    async def receive(self, text_data=None, bytes_data=None):
+        try:
+            data = json.loads(text_data) if text_data else {}
+            if data.get('type') == 'ping':
+                await self.send(text_data=json.dumps({'type': 'pong'}))
+        except Exception as e:
+            logger.warning(f"[QueueEventsConsumer] Error: {e}")
+
+
+class LabResultsConsumer(BaseHospitalConsumer):
+    """
+    Transmite alertas de estudios de laboratorio (completados, críticos, etc.).
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.group_name = 'sgtp_lab_live'
+
+    async def receive(self, text_data=None, bytes_data=None):
+        try:
+            data = json.loads(text_data) if text_data else {}
+            if data.get('type') == 'ping':
+                await self.send(text_data=json.dumps({'type': 'pong'}))
+        except Exception as e:
+            logger.warning(f"[LabResultsConsumer] Error: {e}")
+
+
+class ReportsConsumer(BaseHospitalConsumer):
+    """
+    Transmite métricas y reportes en tiempo real para el dashboard administrativo.
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.group_name = 'sgtp_reports_live'
+
+    async def receive(self, text_data=None, bytes_data=None):
+        try:
+            data = json.loads(text_data) if text_data else {}
+            if data.get('type') == 'ping':
+                await self.send(text_data=json.dumps({'type': 'pong'}))
+        except Exception as e:
+            logger.warning(f"[ReportsConsumer] Error: {e}")
