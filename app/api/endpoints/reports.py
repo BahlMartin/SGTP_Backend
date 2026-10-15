@@ -17,6 +17,9 @@ from app.services.reports.report_facade import ReportFacade
 from app.core.permissions import IsSecretariaOrJefa, IsJefaRole
 from app.core.validators import validar_formato_fecha
 
+from rest_framework.permissions import IsAuthenticated
+from app.core.permissions import IsSecretariaOrJefa # Importas este permiso
+
 PARAMETRO_FECHA_CONSULTA = OpenApiParameter(
     'fecha',
     str,
