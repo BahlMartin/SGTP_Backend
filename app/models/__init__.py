@@ -5,7 +5,17 @@ Centraliza las entidades del sistema: Usuarios, Items (Estudios), Pacientes, Tri
 from app.models.common import SoftDeleteModel
 from app.models.user import Personal, User, RolPersonal, DiaSemanaChoices, DiaLaboralPersonal
 from app.models.shifts import PlanificacionHorasExtras, HabilitacionHoraria, TipoExtensionChoices
-from app.models.studies import Estudios, Item, CatalogItem, TipoMuestra, Seccion, SeccionEstudio
+from app.models.studies import (
+    Estudios,
+    Item,
+    CatalogItem,
+    TipoMuestra,
+    Seccion,
+    SeccionEstudio,
+    EstudioAliasAprendido,
+    PerfilEstudioPatron,
+    CoocurrenciaEstudio
+)
 from app.models.patient import Paciente
 from app.models.box import (
     Box,
@@ -37,6 +47,9 @@ __all__ = [
     'TipoMuestra',
     'Seccion',
     'SeccionEstudio',
+    'EstudioAliasAprendido',
+    'PerfilEstudioPatron',
+    'CoocurrenciaEstudio',
     'Paciente',
     'Box',
     'Ticket',
