@@ -12,9 +12,7 @@ from rest_framework.permissions import IsAuthenticated
 from app.models.patient import Paciente
 from app.schemas.patient import PacienteSerializer
 from app.schemas.ticket import TicketHistorialDetailSerializer
-from app.core.permissions import IsAdmisionOrJefa
-
-
+from app.core.permissions import IsAdmisionOrJefa, IsSecretariaOrJefa
 
 class PacienteViewSet(viewsets.ModelViewSet):
     """
@@ -29,8 +27,14 @@ class PacienteViewSet(viewsets.ModelViewSet):
         """Aplica borrado lógico en lugar de borrado físico destructivo."""
         instance.delete()
 
-    @action(detail=False, methods=['post'], url_path='buscar-por-dni')
+    @action(
+        detail=False,
+        methods=['post'],
+        url_path='buscar-por-dni',
+        permission_classes=[IsAuthenticated, IsAdmisionOrJefa | IsSecretariaOrJefa]
+    )
     def buscar_por_dni(self, request: Request) -> Response:
+
         """Endpoint asistencial directo para verificación de antecedentes en Admisión vía POST."""
         dni = request.data.get('dni')
         if not dni:
@@ -38,6 +42,7 @@ class PacienteViewSet(viewsets.ModelViewSet):
                 {"detail": "El campo 'dni' es requerido en el cuerpo de la solicitud."},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
 
         try:
             paciente = Paciente.objects.get(dni=int(dni))
