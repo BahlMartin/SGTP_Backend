@@ -72,3 +72,19 @@ class OCRIntegrationTestCase(TestCase):
 
         # Verificar que la llamada a requests.post fue realizada
         mock_post.assert_called_once()
+
+    def test_mapeo_textos_con_abreviaturas_clinicas(self):
+        """Valida que textos con abreviaturas médicas (Hto, Orina comp) mapeen a prácticas correctas sin requests.post."""
+        textos = [
+            "Hto y fórmula",
+            "Glucemia en ayunas",
+            "Orina comp",
+            "Dr. Juan Pérez MN 12345"
+        ]
+        sugerencias = OCRIntegrationService.mapear_textos_con_estudios(textos)
+        self.assertEqual(len(sugerencias), 3)
+        codigos = [s['codigo_practica'] for s in sugerencias]
+        self.assertIn('HEMO-01', codigos)
+        self.assertIn('GLUC-01', codigos)
+        self.assertIn('ORI-01', codigos)
+
