@@ -6,7 +6,15 @@ from rest_framework import serializers
 
 
 class RecetaUploadSerializer(serializers.Serializer):
-    file = serializers.FileField(help_text="Archivo de imagen de la receta médica (JPG, PNG).")
+    file = serializers.FileField(
+        required=False,
+        help_text="Archivo de imagen de la receta médica (JPG, PNG)."
+    )
+    textos = serializers.ListField(
+        child=serializers.CharField(allow_blank=False),
+        required=False,
+        help_text="Array de cadenas de texto extraídas por el OCR en cliente (Tesseract.js)."
+    )
 
 
 class OCRScanRequestSerializer(RecetaUploadSerializer):
