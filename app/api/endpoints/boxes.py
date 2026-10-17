@@ -9,6 +9,11 @@ from rest_framework.response import Response
 from rest_framework.routers import DefaultRouter
 from rest_framework.permissions import IsAuthenticated
 
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
+from app.models.box import Box, AsignacionesBox, EstadoBox # Asegúrate de que estén importadas
+from app.schemas.box import BoxSerializer # Asegúrate de que esté importado
+
 from app.models.box import (
     Box,
     AsignacionesBox,
@@ -25,6 +30,19 @@ from app.schemas.ticket import TicketDetailSerializer
 from app.services.triage_service import TriageService
 from app.core.permissions import IsBoxOrJefa
 
+# Función auxiliar para emitir al WebSocket
+def notificar_monitor_operativo_box(box_instance):
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        'sgtp_monitor_operativo', # El nombre del grupo que definimos en MonitorOperativoConsumer
+        {
+            'type': 'broadcast_event', # El método de tu BaseHospitalConsumer
+            'payload': {
+                'action': 'UPDATE_BOX',
+                'data': BoxSerializer(box_instance).data
+            }
+        }
+    )
 
 class BoxViewSet(viewsets.ModelViewSet):
     """
@@ -33,7 +51,7 @@ class BoxViewSet(viewsets.ModelViewSet):
     queryset = Box.objects.all().select_related('personal_actual').order_by('numero')
     serializer_class = BoxSerializer
     permission_classes = [IsAuthenticated]
-
+    
     def perform_update(self, serializer):
         box = serializer.save()
         # Si un técnico pone el box en disponible y no tenía personal asignado, vincularlo liberando otros boxes
@@ -47,6 +65,8 @@ class BoxViewSet(viewsets.ModelViewSet):
         elif box.estado == EstadoBox.FUERA_DE_SERVICIO and box.personal_actual is not None:
             box.personal_actual = None
             box.save(update_fields=['personal_actual'])
+        # [NUEVO] Notificar al WebSocket sobre el cambio de estado
+        notificar_monitor_operativo_box(box)
 
     @action(detail=True, methods=['post'], url_path='tomar-box', permission_classes=[IsBoxOrJefa])
     def tomar_box(self, request: Request, pk: str = None) -> Response:
@@ -67,7 +87,8 @@ class BoxViewSet(viewsets.ModelViewSet):
             box.save(update_fields=['personal_actual', 'estado'])
         else:
             box.save(update_fields=['personal_actual'])
-
+        # [NUEVO] Notificar al WebSocket que un técnico tomó el box            
+        notificar_monitor_operativo_box(box)
         return Response(BoxSerializer(box).data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'], url_path='llamar-siguiente', permission_classes=[IsBoxOrJefa])
@@ -150,6 +171,8 @@ class BoxViewSet(viewsets.ModelViewSet):
 
         # Refrescar box
         box.refresh_from_db()
+        # [NUEVO] Notificar al WebSocket que el box volvio a estar disponible
+        notificar_monitor_operativo_box(box)
         return Response(
             {
                 "mensaje": f"Atención del Box {box.numero} finalizada.",
@@ -158,6 +181,7 @@ class BoxViewSet(viewsets.ModelViewSet):
             },
             status=status.HTTP_200_OK
         )
+        
 
     @action(detail=False, methods=['get'], url_path='estado-general')
     def estado_general(self, request: Request) -> Response:
