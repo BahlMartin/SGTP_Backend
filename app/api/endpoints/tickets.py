@@ -27,6 +27,23 @@ from app.schemas.ticket import (
 from app.services.ticket_service import TicketService
 from app.services.triage_service import construir_orden_prioridad_case
 
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
+
+# Función auxiliar para emitir al WebSocket
+def notificar_monitor_operativo_ticket(ticket_instance):
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        'sgtp_monitor_operativo',
+        {
+            'type': 'broadcast_event',
+            'payload': {
+                'action': 'NEW_TICKET',
+                # Enviamos el ticket serializado para que el Frontend sepa a qué personal sumarle 1
+                'data': TicketDetailSerializer(ticket_instance).data 
+            }
+        }
+    )
 
 class TicketViewSet(viewsets.ModelViewSet):
     """
@@ -85,9 +102,13 @@ class TicketViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
         ticket = serializer.instance
+
+        # [NUEVO] Notificar al WebSocket la creación del ticket
+        notificar_monitor_operativo_ticket(ticket)
+
         headers = self.get_success_headers(serializer.data)
         return Response(TicketDetailSerializer(ticket).data, status=status.HTTP_201_CREATED, headers=headers)
-
+        
     def update(self, request: Request, *args, **kwargs) -> Response:
         """Aplica la regla de inmutabilidad de 24h y exclusividad para el rol 'Jefa'."""
         partial = kwargs.pop('partial', False)
