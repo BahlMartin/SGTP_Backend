@@ -30,20 +30,29 @@ from app.services.triage_service import construir_orden_prioridad_case
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
-# Función auxiliar para emitir al WebSocket
-def notificar_monitor_operativo_ticket(ticket_instance):
+def notificar_eventos_ticket(ticket_instance, accion):
+    """
+    Notifica a varios consumidores (Jefa, Pantallas de Espera, Boxes)
+    sobre la creación o cambio de un ticket.
+    """
     channel_layer = get_channel_layer()
-    async_to_sync(channel_layer.group_send)(
-        'sgtp_monitor_operativo',
-        {
-            'type': 'broadcast_event',
-            'payload': {
-                'action': 'NEW_TICKET',
-                # Enviamos el ticket serializado para que el Frontend sepa a qué personal sumarle 1
-                'data': TicketDetailSerializer(ticket_instance).data 
-            }
+    payload = {
+        'type': 'broadcast_event',
+        'payload': {
+            'action': accion,
+            'data': TicketDetailSerializer(ticket_instance).data 
         }
-    )
+    }
+    
+    # 1. Notificar al panel de la Jefa (Monitor Operativo)
+    async_to_sync(channel_layer.group_send)('sgtp_monitor_operativo', payload)
+    
+    # 2. Notificar a las Pantallas de Sala de Espera / Cola Multibox
+    async_to_sync(channel_layer.group_send)('sgtp_queue_live', payload)
+    
+    # 3. Notificar a los Técnicos (Últimos ingresos)
+    async_to_sync(channel_layer.group_send)('sgtp_tickets_live', payload)
+
 
 class TicketViewSet(viewsets.ModelViewSet):
     """
@@ -103,8 +112,11 @@ class TicketViewSet(viewsets.ModelViewSet):
         self.perform_create(serializer)
         ticket = serializer.instance
 
-        # [NUEVO] Notificar al WebSocket la creación del ticket
-        notificar_monitor_operativo_ticket(ticket)
+        # Notificar al WebSocket la creación del ticket
+        notificar_eventos_ticket(ticket, 'NEW_TICKET')
+
+        # Dispara actualización en Cola, Boxes y Jefatura a la vez
+        notificar_eventos_ticket(ticket, 'NEW_TICKET')
 
         headers = self.get_success_headers(serializer.data)
         return Response(TicketDetailSerializer(ticket).data, status=status.HTTP_201_CREATED, headers=headers)
