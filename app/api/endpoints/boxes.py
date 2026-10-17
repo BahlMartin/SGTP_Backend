@@ -30,6 +30,31 @@ from app.schemas.ticket import TicketDetailSerializer
 from app.services.triage_service import TriageService
 from app.core.permissions import IsBoxOrJefa
 
+from app.services.ticket_service import TicketService # Importamos tu servicio de cálculo
+
+def notificar_actualizacion_reportes():
+    """
+    Obliga a las vistas de Reportes (Secretaría / Jefa) a actualizarse
+    cuando ocurre un evento significativo (ej. cierre de atención).
+    """
+    channel_layer = get_channel_layer()
+    
+    # Opcional: Podrías calcular los datos aquí usando tu TicketService
+    # y enviarlos directamente por el WebSocket, o simplemente enviar
+    # un flag para que el Frontend haga un nuevo GET a los endpoints.
+    # Usaremos el enfoque de enviar el flag por simplicidad:
+    
+    async_to_sync(channel_layer.group_send)(
+        'sgtp_reports_live', # El grupo definido en tu ReportsConsumer
+        {
+            'type': 'broadcast_event',
+            'payload': {
+                'action': 'REFRESH_REPORTS',
+                'mensaje': 'Nuevos datos estadísticos disponibles'
+            }
+        }
+    )
+
 # Función auxiliar para emitir al WebSocket
 def notificar_monitor_operativo_box(box_instance):
     channel_layer = get_channel_layer()
@@ -103,7 +128,7 @@ class BoxViewSet(viewsets.ModelViewSet):
             box_id=box.id,
             personal=request.user
         )
-
+        
         if not ticket:
             return Response(
                 {
@@ -113,7 +138,28 @@ class BoxViewSet(viewsets.ModelViewSet):
                 },
                 status=status.HTTP_200_OK
             )
-
+        
+        if ticket:
+            # Notificamos a la cola de espera y boxes que este ticket ya fue llamado
+            # Puedes importar la función notificar_eventos_ticket desde tickets.py
+            # o reescribirla aquí.
+            
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                'sgtp_queue_live', 
+                {
+                    'type': 'broadcast_event',
+                    'payload': {
+                        'action': 'TICKET_LLAMADO',
+                        'data': {
+                            'ticket_id': ticket.id,
+                            'box_numero': box.numero,
+                            'llamado': f"{ticket.letra}-{ticket.numero}"
+                        }
+                    }
+                }
+            )
+        
         return Response(
             {
                 "mensaje": f"Paciente llamado con éxito al Box {box.numero}.",
@@ -171,8 +217,12 @@ class BoxViewSet(viewsets.ModelViewSet):
 
         # Refrescar box
         box.refresh_from_db()
-        # [NUEVO] Notificar al WebSocket que el box volvio a estar disponible
+
+        # Notificar al WebSocket que el box volvio a estar disponible
         notificar_monitor_operativo_box(box)
+        # Notifica a Secretaría/Jefa que las estadísticas (Atendidos, Espera Promedio) cambiaron
+        notificar_actualizacion_reportes()
+
         return Response(
             {
                 "mensaje": f"Atención del Box {box.numero} finalizada.",
