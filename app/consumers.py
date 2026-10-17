@@ -1,7 +1,9 @@
 import json
 import logging
 from channels.generic.websocket import AsyncWebsocketConsumer
-
+from channels.db import database_sync_to_async
+# Asumiendo la ruta segun tu permissions.py
+from app.models.user import RolPersonal 
 logger = logging.getLogger('app.consumers')
 
 
@@ -72,7 +74,6 @@ class BoxStatusConsumer(BaseHospitalConsumer):
         except Exception as e:
             logger.warning(f"[BoxStatusConsumer] Error procesando mensaje de entrada: {e}")
 
-# Añado varias clases consumidoras para actualizaciones en tiempo real
 class QueueEventsConsumer(BaseHospitalConsumer):
     """
     Transmite la cola multibox centralizada.
@@ -123,3 +124,40 @@ class ReportsConsumer(BaseHospitalConsumer):
                 await self.send(text_data=json.dumps({'type': 'pong'}))
         except Exception as e:
             logger.warning(f"[ReportsConsumer] Error: {e}")
+
+# Nuevo MonitorOperativoConsumer
+class MonitorOperativoConsumer(BaseHospitalConsumer):
+    """
+    Transmite métricas globales en tiempo real para el panel 
+    de Monitoreo Operativo (Jefa y Admin).
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.group_name = 'sgtp_monitor_operativo'
+
+    @database_sync_to_async
+    def _has_jefa_permission(self, user):
+        """Replicamos la lógica de IsJefaRole de forma asíncrona"""
+        return bool(user and user.is_authenticated and user.rol in [RolPersonal.ADMIN, RolPersonal.JEFA])
+
+    async def connect(self):
+        user = self.scope.get('user')
+        
+        # 1. Validar si el usuario está autenticado y tiene el rol correcto
+        has_permission = await self._has_jefa_permission(user)
+        
+        if has_permission:
+            # 2. Si es Jefa o Admin, aceptamos la conexión usando la lógica base
+            await super().connect()
+        else:
+            # 3. Si no tiene permisos, rechazamos la conexión WebSocket
+            logger.warning(f"[WebSocket] Conexión rechazada para usuario: {getattr(user, 'username', 'Anónimo')}")
+            await self.close(code=4003) # 4003: Prohibido
+
+    async def receive(self, text_data=None, bytes_data=None):
+        try:
+            data = json.loads(text_data) if text_data else {}
+            if data.get('type') == 'ping':
+                await self.send(text_data=json.dumps({'type': 'pong'}))
+        except Exception as e:
+            logger.warning(f"[MonitorOperativoConsumer] Error: {e}")
