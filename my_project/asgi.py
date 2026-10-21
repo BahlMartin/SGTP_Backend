@@ -15,11 +15,29 @@ from channels.security.websocket import AllowedHostsOriginValidator
 from channels.auth import AuthMiddlewareStack
 from app.routing import websocket_urlpatterns
 
+from app.middlewares.ws_auth import QueryStringAuthMiddleware
+
 application = ProtocolTypeRouter({
     "http": django_asgi_app,
     "websocket": AllowedHostsOriginValidator(
-        AuthMiddlewareStack(
-            URLRouter(websocket_urlpatterns)
+        QueryStringAuthMiddleware(
+            AuthMiddlewareStack(
+                URLRouter(websocket_urlpatterns)
+            )
+        )
+    ),
+})
+
+CORS_ALLOWED_ORIGINS = [
+    "https://sgtp-develop.vercel.app",
+    "http://localhost:5173", # Para desarrollo local
+]
+
+CSRF_TRUSTED_ORIGINS = [
+    "https://sgtp-develop.vercel.app",
+]
+
+app = application
         )
     ),
 })
