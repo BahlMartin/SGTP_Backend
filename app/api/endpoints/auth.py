@@ -43,10 +43,13 @@ class LoginView(APIView):
 
         # Iniciar sesión de Django
         login(request, user)
+        
         return Response({
             "mensaje": "Inicio de sesión exitoso.",
-            "usuario": PersonalAuthSerializer(user).data
+            "usuario": PersonalAuthSerializer(user).data,
+            "token": request.session.session_key  # 👇 NUEVA LÍNEA: Enviamos la sesión al frontend
         }, status=status.HTTP_200_OK)
+        
 
 
 class LogoutView(APIView):
