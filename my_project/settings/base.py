@@ -6,10 +6,8 @@ import os
 from pathlib import Path
 import environ
 from django.core.exceptions import ImproperlyConfigured
-# Habilitar la lectura del encabezado en el Backend (settings.py) Sigue en la linea 70
 from corsheaders.defaults import default_headers
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 env = environ.Env()
@@ -25,7 +23,6 @@ SECRET_KEY = env('DJANGO_SECRET_KEY')
 DEBUG = env.bool('DJANGO_DEBUG', default=False)
 ALLOWED_HOSTS = env.list('DJANGO_ALLOWED_HOSTS')
 
-# Reverse Proxy SSL & Host para Render / Cloudflare
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 USE_X_FORWARDED_HOST = True
 
@@ -38,16 +35,13 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
 ]
 
 CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOW_ALL_ORIGINS = DEBUG  # En modo debug local permite facilitar pruebas si CORS_ALLOWED_ORIGINS está vacío
+CORS_ALLOW_ALL_ORIGINS = DEBUG
 
 CSRF_TRUSTED_ORIGINS = env.list('DJANGO_CSRF_TRUSTED_ORIGINS', default=CORS_ALLOWED_ORIGINS)
 
 # ==============================================================================
 # COOKIES & SESIONES (Soporte SPA Desacoplada Cross-Site / Vercel / Render)
 # ==============================================================================
-# En producción HTTPS (Render), SameSite='None' y Secure=True son obligatorios para que
-# los navegadores modernos permitan enviar la cookie de sesión en peticiones fetch cross-domain.
-# En desarrollo local por HTTP (DEBUG=True), Secure=False y SameSite='Lax' para evitar rechazos en HTTP.
 SESSION_COOKIE_SAMESITE = env('DJANGO_SESSION_COOKIE_SAMESITE', default='Lax' if DEBUG else 'None')
 SESSION_COOKIE_SECURE = env.bool('DJANGO_SESSION_COOKIE_SECURE', default=not DEBUG)
 SESSION_COOKIE_HTTPONLY = True
@@ -71,10 +65,10 @@ OCR_SERVICE_URL = env('OCR_SERVICE_URL')
 OCR_SERVICE_TIMEOUT_SECONDS = env.int('OCR_SERVICE_TIMEOUT_SECONDS', default=15)
 OCR_SIMILARITY_THRESHOLD = env.int('OCR_SIMILARITY_THRESHOLD', default=80)
 
-# # Habilitar la lectura del encabezado en el Backend (settings.py)
 CORS_ALLOW_HEADERS = list(default_headers) + [
     'authorization',
 ]
+
 # ==============================================================================
 # 2. APLICACIONES REGISTRADAS
 # ==============================================================================
@@ -101,7 +95,6 @@ LOCAL_APPS = [
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
-# Modelo de Usuario Personalizado
 AUTH_USER_MODEL = 'app.Personal'
 
 # ==============================================================================
@@ -118,13 +111,12 @@ MIDDLEWARE = [
     'app.middlewares.security.JWEDecryptionMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'auditlog.middleware.AuditlogMiddleware',  # Registro inmutable append-only
-    'app.middlewares.security.ShiftScheduleRestrictionMiddleware',  # Control horario de turnos
+    'auditlog.middleware.AuditlogMiddleware',
+    'app.middlewares.security.ShiftScheduleRestrictionMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'app.middlewares.error_handler.GlobalErrorHandlerMiddleware',
 ]
-
 
 ROOT_URLCONF = 'my_project.urls'
 
@@ -178,7 +170,6 @@ AUTH_PASSWORD_VALIDATORS = [
 # ==============================================================================
 LANGUAGE_CODE = 'es-ar'
 TIME_ZONE = 'America/Argentina/Buenos_Aires'
-#TIME_ZONE = 'UTC'  # Estricto UTC para consistencia asistencial
 USE_I18N = True
 USE_TZ = True
 
@@ -237,7 +228,6 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
 
-# Channels Layer (Redis) para WebSockets en tiempo real
 CHANNEL_LAYERS = {
     'default': {
         'BACKEND': 'channels_redis.core.RedisChannelLayer',
@@ -263,11 +253,3 @@ DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL')
 # 11. AUDITORÍA INALTERABLE (django-auditlog)
 # ==============================================================================
 AUDITLOG_ENABLED = env.bool('AUDITLOG_ENABLED', default=True)
-
-# ==============================================================================
-# CONFIGURACIÓN DE COOKIES PARA CROSS-DOMAIN (Vercel <-> Render)
-# ==============================================================================
-SESSION_COOKIE_SAMESITE = 'None'
-SESSION_COOKIE_SECURE = True
-CSRF_COOKIE_SAMESITE = 'None'
-CSRF_COOKIE_SECURE = True
