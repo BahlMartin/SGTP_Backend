@@ -23,7 +23,10 @@ class QueryStringAuthMiddleware:
     async def __call__(self, scope, receive, send):
         query_string = scope.get('query_string', b'').decode('utf-8')
         query_params = parse_qs(query_string)
-        session_key = query_params.get('sessionid', [None])[0]
+        
+        # Busca 'token' O 'sessionid' en la URL
+        token_list = query_params.get('token') or query_params.get('sessionid')
+        session_key = token_list[0] if token_list else None
 
         if session_key:
             scope['user'] = await get_user_from_session(session_key)
