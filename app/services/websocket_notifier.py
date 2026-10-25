@@ -23,11 +23,13 @@ def emitir_evento_ws(grupo: str, evento_tipo: str, datos: dict):
 # --- EJEMPLOS DE USO ---
 
 def notificar_ticket_ingresado(ticket):
+    paciente_str = f"{ticket.paciente.nombre} {ticket.paciente.apellidos}".strip() if ticket.paciente else ""
     emitir_evento_ws('sgtp_tickets_live', 'TICKET_CREATED', {
-        'id': ticket.id,
-        'paciente': ticket.paciente_nombre, # Asegúrate de desencriptar si usas Fernet
-        'nivel_triage': ticket.nivel_triage,
-        'hora_ingreso': ticket.hora_ingreso.isoformat()
+        'id': str(ticket.id_ticket),
+        'num_totem': ticket.num_totem,
+        'paciente': paciente_str,
+        'clasificacion_triage': ticket.clasificacion_triage,
+        'hora_ingreso': ticket.fecha_hora_admision.isoformat() if ticket.fecha_hora_admision else None
     })
 
 def notificar_actualizacion_cola(lista_cola):

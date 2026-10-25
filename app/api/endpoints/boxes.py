@@ -147,9 +147,10 @@ class BoxViewSet(viewsets.ModelViewSet):
                         'event': 'TICKET_LLAMADO',
                         'action': 'TICKET_LLAMADO',
                         'data': {
-                            'ticket_id': ticket.id,
+                            'ticket_id': str(ticket.id_ticket),
                             'box_numero': box.numero,
-                            'llamado': f"{ticket.letra}-{ticket.numero}"
+                            'llamado': ticket.num_totem,
+                            'ticket': TicketDetailSerializer(ticket).data
                         }
                     }
                 }

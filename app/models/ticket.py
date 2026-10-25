@@ -106,6 +106,11 @@ class Ticket(SoftDeleteModel):
                 'justificacion_otro': "La justificación médica es estrictamente obligatoria cuando la clasificación de triage es 'Otro'."
             })
 
+    @property
+    def id(self):
+        """Compatibilidad para accesos que asumen id en lugar de id_ticket."""
+        return self.id_ticket
+
     def __str__(self) -> str:
         return f"Ticket {self.num_totem} ({self.clasificacion_triage}) - [{self.estado}]"
 
