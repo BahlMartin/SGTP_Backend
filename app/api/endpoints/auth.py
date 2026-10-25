@@ -43,13 +43,31 @@ class LoginView(APIView):
 
         # Iniciar sesión de Django
         login(request, user)
+        if not request.session.session_key:
+            request.session.save()
         
         return Response({
             "mensaje": "Inicio de sesión exitoso.",
             "usuario": PersonalAuthSerializer(user).data,
-            "token": request.session.session_key  # 👇 NUEVA LÍNEA: Enviamos la sesión al frontend
+            "token": request.session.session_key
         }, status=status.HTTP_200_OK)
-        
+
+
+class SessionMeView(APIView):
+    """
+    Permite a un usuario autenticado recuperar su perfil y token de sesión activo.
+    Ideal para rehidratar el token de WebSocket tras recargas de página.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(request=None, responses={200: PersonalAuthSerializer})
+    def get(self, request: Request) -> Response:
+        if not request.session.session_key:
+            request.session.save()
+        return Response({
+            "usuario": PersonalAuthSerializer(request.user).data,
+            "token": request.session.session_key
+        }, status=status.HTTP_200_OK)
 
 
 class LogoutView(APIView):
@@ -62,6 +80,7 @@ class LogoutView(APIView):
         TriageService.liberar_boxes_de_personal(request.user)
         logout(request)
         return Response({"mensaje": "Sesión finalizada correctamente."}, status=status.HTTP_200_OK)
+
 
 
 
@@ -150,6 +169,7 @@ app_name = 'auth_endpoints'
 urlpatterns = [
     path('login/', LoginView.as_view(), name='login'),
     path('logout/', LogoutView.as_view(), name='logout'),
+    path('session/', SessionMeView.as_view(), name='session-me'),
     path('desbloquear/', DesbloqueoManualView.as_view(), name='desbloqueo-manual'),
     path('bloquear/', BloqueoManualView.as_view(), name='bloqueo-manual'),
     path('emergency-unlock/', EmergencyUnlockView.as_view(), name='emergency-unlock'),
@@ -158,8 +178,10 @@ urlpatterns = [
 __all__ = [
     'LoginView',
     'LogoutView',
+    'SessionMeView',
     'DesbloqueoManualView',
     'BloqueoManualView',
     'EmergencyUnlockView',
     'urlpatterns',
 ]
+

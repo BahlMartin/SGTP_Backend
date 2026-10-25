@@ -4,6 +4,7 @@ from channels.layers import get_channel_layer
 def emitir_evento_ws(grupo: str, evento_tipo: str, datos: dict):
     """
     Función helper para enviar eventos a WebSockets desde cualquier parte de Django.
+    Estandariza el payload con 'event' y 'action' para máxima compatibilidad con el frontend.
     """
     channel_layer = get_channel_layer()
     async_to_sync(channel_layer.group_send)(
@@ -12,10 +13,12 @@ def emitir_evento_ws(grupo: str, evento_tipo: str, datos: dict):
             'type': 'broadcast_event', # Llama al método de BaseHospitalConsumer
             'payload': {
                 'event': evento_tipo,
+                'action': evento_tipo,
                 'data': datos
             }
         }
     )
+
 
 # --- EJEMPLOS DE USO ---
 

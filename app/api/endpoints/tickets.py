@@ -30,7 +30,7 @@ from app.services.triage_service import construir_orden_prioridad_case
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
-def notificar_eventos_ticket(ticket_instance, accion):
+def notificar_eventos_ticket(ticket_instance, accion='NEW_TICKET'):
     """
     Notifica a varios consumidores (Jefa, Pantallas de Espera, Boxes)
     sobre la creación o cambio de un ticket.
@@ -39,6 +39,7 @@ def notificar_eventos_ticket(ticket_instance, accion):
     payload = {
         'type': 'broadcast_event',
         'payload': {
+            'event': 'TICKET_CREATED',
             'action': accion,
             'data': TicketDetailSerializer(ticket_instance).data 
         }
@@ -52,6 +53,7 @@ def notificar_eventos_ticket(ticket_instance, accion):
     
     # 3. Notificar a los Técnicos (Últimos ingresos)
     async_to_sync(channel_layer.group_send)('sgtp_tickets_live', payload)
+
 
 
 class TicketViewSet(viewsets.ModelViewSet):
@@ -112,14 +114,12 @@ class TicketViewSet(viewsets.ModelViewSet):
         self.perform_create(serializer)
         ticket = serializer.instance
 
-        # Notificar al WebSocket la creación del ticket
-        notificar_eventos_ticket(ticket, 'NEW_TICKET')
-
-        # Dispara actualización en Cola, Boxes y Jefatura a la vez
+        # Notificar al WebSocket la creación del ticket (Cola, Boxes y Jefatura)
         notificar_eventos_ticket(ticket, 'NEW_TICKET')
 
         headers = self.get_success_headers(serializer.data)
         return Response(TicketDetailSerializer(ticket).data, status=status.HTTP_201_CREATED, headers=headers)
+
         
     def update(self, request: Request, *args, **kwargs) -> Response:
         """Aplica la regla de inmutabilidad de 24h y exclusividad para el rol 'Jefa'."""
