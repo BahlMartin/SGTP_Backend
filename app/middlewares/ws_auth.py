@@ -21,6 +21,7 @@ class QueryStringAuthMiddleware:
         self.inner = inner
 
     async def __call__(self, scope, receive, send):
+        scope = dict(scope)
         query_string = scope.get('query_string', b'').decode('utf-8')
         query_params = parse_qs(query_string)
         
@@ -29,6 +30,9 @@ class QueryStringAuthMiddleware:
         session_key = token_list[0] if token_list else None
 
         if session_key:
-            scope['user'] = await get_user_from_session(session_key)
+            user = await get_user_from_session(session_key)
+            if user and user.is_authenticated:
+                scope['user'] = user
             
         return await self.inner(scope, receive, send)
+
