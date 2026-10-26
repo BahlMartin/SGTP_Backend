@@ -65,6 +65,24 @@ def notificar_monitor_operativo_box(box_instance):
     async_to_sync(channel_layer.group_send)('sgtp_monitor_operativo', payload)
     async_to_sync(channel_layer.group_send)('sgtp_boxes_live', payload)
 
+def notificar_actualizacion_estudios_laboratorio(ticket=None):
+    """
+    Notifica a Jefatura que los estudios de laboratorio han sido consolidados y finalizados
+    tras el cierre de atención en Box (cerrar-atencion), ya que el técnico de box es la
+    última persona que decide qué estudios se realizan al paciente.
+    """
+    channel_layer = get_channel_layer()
+    payload = {
+        'type': 'broadcast_event',
+        'payload': {
+            'event': 'LAB_STUDIES_UPDATED',
+            'action': 'REFRESH_LAB_STUDIES',
+            'ticket_id': str(ticket.id_ticket) if ticket and hasattr(ticket, 'id_ticket') else None
+        }
+    }
+    async_to_sync(channel_layer.group_send)('sgtp_lab_live', payload)
+    async_to_sync(channel_layer.group_send)('sgtp_monitor_operativo', payload)
+
 
 class BoxViewSet(viewsets.ModelViewSet):
     """
@@ -222,6 +240,8 @@ class BoxViewSet(viewsets.ModelViewSet):
         notificar_monitor_operativo_box(box)
         # Notifica a Secretaría/Jefa que las estadísticas (Atendidos, Espera Promedio) cambiaron
         notificar_actualizacion_reportes()
+        # Notifica a Jefa/Laboratorio que los estudios fueron consolidados y finalizados tras la consulta en Box
+        notificar_actualizacion_estudios_laboratorio(ticket=getattr(asignacion, 'ticket', None))
 
         return Response(
             {

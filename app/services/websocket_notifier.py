@@ -53,6 +53,13 @@ def notificar_laboratorio_listo(estudio):
         'url_resultado': estudio.url_pdf
     })
 
+def notificar_estudios_actualizados(ticket=None):
+    payload = {
+        'ticket_id': str(ticket.id_ticket) if ticket and hasattr(ticket, 'id_ticket') else None
+    }
+    emitir_evento_ws('sgtp_lab_live', 'LAB_STUDIES_UPDATED', payload)
+    emitir_evento_ws('sgtp_monitor_operativo', 'LAB_STUDIES_UPDATED', payload)
+
 def notificar_metrica_reporte(metricas):
     # Ideal para llamar desde tus tareas de Celery o cuando cambia una métrica clave
     emitir_evento_ws('sgtp_reports_live', 'REALTIME_METRICS_UPDATED', metricas)
