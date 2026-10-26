@@ -38,17 +38,16 @@ def notificar_actualizacion_reportes():
     cuando ocurre un evento significativo (ej. cierre de atención).
     """
     channel_layer = get_channel_layer()
-    async_to_sync(channel_layer.group_send)(
-        'sgtp_reports_live', # El grupo definido en ReportsConsumer
-        {
-            'type': 'broadcast_event',
-            'payload': {
-                'event': 'REFRESH_REPORTS',
-                'action': 'REFRESH_REPORTS',
-                'mensaje': 'Nuevos datos estadísticos disponibles'
-            }
+    payload = {
+        'type': 'broadcast_event',
+        'payload': {
+            'event': 'REFRESH_REPORTS',
+            'action': 'REFRESH_REPORTS',
+            'mensaje': 'Nuevos datos estadísticos disponibles'
         }
-    )
+    }
+    async_to_sync(channel_layer.group_send)('sgtp_reports_live', payload)
+    async_to_sync(channel_layer.group_send)('sgtp_monitor_operativo', payload)
 
 # Función auxiliar para emitir al WebSocket tanto a Jefatura como a Boxes en línea
 def notificar_monitor_operativo_box(box_instance):
@@ -155,24 +154,24 @@ class BoxViewSet(viewsets.ModelViewSet):
             )
         
         if ticket:
-            # Notificamos a la cola de espera que este ticket ya fue llamado
+            # Notificamos a la cola de espera y al monitor de jefatura que este ticket ya fue llamado
             channel_layer = get_channel_layer()
-            async_to_sync(channel_layer.group_send)(
-                'sgtp_queue_live', 
-                {
-                    'type': 'broadcast_event',
-                    'payload': {
-                        'event': 'TICKET_LLAMADO',
-                        'action': 'TICKET_LLAMADO',
-                        'data': {
-                            'ticket_id': str(ticket.id_ticket),
-                            'box_numero': box.numero,
-                            'llamado': ticket.num_totem,
-                            'ticket': TicketDetailSerializer(ticket).data
-                        }
+            llamado_payload = {
+                'type': 'broadcast_event',
+                'payload': {
+                    'event': 'TICKET_LLAMADO',
+                    'action': 'TICKET_LLAMADO',
+                    'data': {
+                        'ticket_id': str(ticket.id_ticket),
+                        'box_numero': box.numero,
+                        'llamado': ticket.num_totem,
+                        'ticket': TicketDetailSerializer(ticket).data
                     }
                 }
-            )
+            }
+            async_to_sync(channel_layer.group_send)('sgtp_queue_live', llamado_payload)
+            async_to_sync(channel_layer.group_send)('sgtp_monitor_operativo', llamado_payload)
+
             # Notificamos a boxes y monitoreo que el box ahora está en atención
             box.refresh_from_db()
             notificar_monitor_operativo_box(box)
