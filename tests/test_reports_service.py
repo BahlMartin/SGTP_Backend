@@ -1,4 +1,4 @@
-"""
+﻿"""
 Tests para Consolidación de Reportes Diarios, Generación de PDF y Despacho SMTP.
 """
 from datetime import timedelta
@@ -210,7 +210,7 @@ class ReportsServiceTestCase(TestCase):
         # Verificar correo en outbox de Django
         self.assertEqual(len(mail.outbox), 1)
         email_enviado = mail.outbox[0]
-        self.assertIn('Reporte Asistencial Consolidado', email_enviado.subject)
+        self.assertIn('Informe diario de actividad', email_enviado.subject)
         self.assertEqual([self.jefa.email], email_enviado.to)
         self.assertEqual(len(email_enviado.attachments), 1)
         self.assertTrue(email_enviado.attachments[0][0].endswith('.pdf'))
