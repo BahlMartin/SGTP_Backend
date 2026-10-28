@@ -15,6 +15,15 @@ def get_database_config() -> Dict[str, Any]:
     }
     if db_config['default']['ENGINE'] == 'django.db.backends.postgresql':
         db_config['default'].setdefault('OPTIONS', {})['sslmode'] = settings.DB_SSL_MODE
+        db_config['default']['CONN_MAX_AGE'] = env.int('DB_CONN_MAX_AGE', default=0)
+        db_config['default']['CONN_HEALTH_CHECKS'] = True
+        db_config['default']['DISABLE_SERVER_SIDE_CURSORS'] = True
+        if (
+            env.bool('DB_USE_TRANSACTION_POOLER', default=True)
+            and str(db_config['default'].get('HOST', '')).endswith('.pooler.supabase.com')
+            and str(db_config['default'].get('PORT', '')) == '5432'
+        ):
+            db_config['default']['PORT'] = 6543
     return db_config
 
 

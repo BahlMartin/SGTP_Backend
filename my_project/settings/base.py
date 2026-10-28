@@ -148,6 +148,17 @@ DATABASES = {
 db_ssl_mode = env('DB_SSL_MODE', default='require')
 if DATABASES['default']['ENGINE'] == 'django.db.backends.postgresql':
     DATABASES['default'].setdefault('OPTIONS', {})['sslmode'] = db_ssl_mode
+    DATABASES['default']['CONN_MAX_AGE'] = env.int('DB_CONN_MAX_AGE', default=0)
+    DATABASES['default']['CONN_HEALTH_CHECKS'] = True
+    DATABASES['default']['DISABLE_SERVER_SIDE_CURSORS'] = True
+    # Si se conecta al pooler de Supabase en puerto 5432 (Session Mode, límite 15 conexiones),
+    # migrar automáticamente al puerto 6543 (Transaction Mode) para evitar EMAXCONNSESSION en ASGI/Daphne.
+    if (
+        env.bool('DB_USE_TRANSACTION_POOLER', default=True)
+        and str(DATABASES['default'].get('HOST', '')).endswith('.pooler.supabase.com')
+        and str(DATABASES['default'].get('PORT', '')) == '5432'
+    ):
+        DATABASES['default']['PORT'] = 6543
 
 # ==============================================================================
 # 5. POLÍTICA DE HASHING DE CONTRASEÑAS (ARGON2 + PBKDF2)
