@@ -7,7 +7,7 @@ from datetime import date, datetime, time
 from django.utils import timezone
 from django.db.models import Count, Q
 
-from app.models.box import AsignacionesBox
+from app.models.box import AsignacionesBox, MotivoCierreBox
 from app.models.ticket import (
     Ticket,
     TicketEstudios,
@@ -124,7 +124,7 @@ class ReportMetricsService:
         tiempos_atencion_minutos: List[float] = []
         tiempos_atencion_por_personal: Dict[int, List[float]] = {}
         for asig in asignaciones_dia:
-            if asig.fecha_hora_final:
+            if asig.fecha_hora_final and asig.motivo_cierre != MotivoCierreBox.CANCELADO:
                 diff = (asig.fecha_hora_final - asig.fecha_hora_inicio).total_seconds() / 60.0
                 if diff >= 0:
                     tiempos_atencion_minutos.append(diff)
@@ -200,7 +200,7 @@ class ReportMetricsService:
 
             atenciones_slot = []
             for a in asig_slot:
-                if a.fecha_hora_final:
+                if a.fecha_hora_final and a.motivo_cierre != MotivoCierreBox.CANCELADO:
                     d = (a.fecha_hora_final - a.fecha_hora_inicio).total_seconds() / 60.0
                     if d >= 0:
                         atenciones_slot.append(d)
@@ -225,7 +225,11 @@ class ReportMetricsService:
             ticket__in=tickets_dia
         ).select_related('estudio')
 
-        estudios_validos_qs = ticket_estudios_dia.exclude(estado=EstadoEstudio.CANCELADO)
+        estudios_validos_qs = ticket_estudios_dia.exclude(
+            estado=EstadoEstudio.CANCELADO
+        ).exclude(
+            ticket__estado=EstadoTicket.CANCELADO
+        )
         total_estudios = estudios_validos_qs.count()
 
         # Agregación de todas las prácticas individuales
@@ -297,9 +301,10 @@ class ReportMetricsService:
         # ==============================================================================
         # 7. AUDITORÍA DE CALIDAD Y DISCREPANCIAS EN BOX
         # ==============================================================================
-        total_cargados_admision = ticket_estudios_dia.filter(origen=OrigenEstudio.ADMISION).count()
-        total_agregados_box = ticket_estudios_dia.filter(origen=OrigenEstudio.BOX).count()
-        total_cancelados_box = ticket_estudios_dia.filter(estado=EstadoEstudio.CANCELADO).count()
+        ticket_estudios_efectivos_dia = ticket_estudios_dia.exclude(ticket__estado=EstadoTicket.CANCELADO)
+        total_cargados_admision = ticket_estudios_efectivos_dia.filter(origen=OrigenEstudio.ADMISION).count()
+        total_agregados_box = ticket_estudios_efectivos_dia.filter(origen=OrigenEstudio.BOX).count()
+        total_cancelados_box = ticket_estudios_efectivos_dia.filter(estado=EstadoEstudio.CANCELADO).count()
 
         tasa_rectificacion = (
             round(((total_agregados_box + total_cancelados_box) / total_cargados_admision) * 100, 1)
@@ -350,7 +355,11 @@ class ReportMetricsService:
                 'personal__matricula',
                 'personal__email'
             )
-            .annotate(pacientes_atendidos=Count('id'))
+            .annotate(
+                pacientes_atendidos=Count('id', filter=Q(motivo_cierre=MotivoCierreBox.FINALIZADO)),
+                pacientes_ausentes=Count('id', filter=Q(motivo_cierre=MotivoCierreBox.CANCELADO)),
+                total_convocados=Count('id')
+            )
             .order_by('-pacientes_atendidos')
         )
         rendimiento_box = []
@@ -364,6 +373,8 @@ class ReportMetricsService:
                 'matricula': p.get('personal__matricula') or '—',
                 'email': p['personal__email'],
                 'pacientes_atendidos': p['pacientes_atendidos'],
+                'pacientes_ausentes': p.get('pacientes_ausentes', 0),
+                'total_convocados': p.get('total_convocados', p['pacientes_atendidos']),
                 'promedio_atencion_minutos': prom_p,
             })
 
@@ -375,7 +386,11 @@ class ReportMetricsService:
                 'personal__rol',
                 'personal__email'
             )
-            .annotate(pacientes_atendidos=Count('id'))
+            .annotate(
+                pacientes_atendidos=Count('id', filter=Q(motivo_cierre=MotivoCierreBox.FINALIZADO)),
+                pacientes_ausentes=Count('id', filter=Q(motivo_cierre=MotivoCierreBox.CANCELADO)),
+                total_convocados=Count('id')
+            )
             .order_by('-pacientes_atendidos')
         )
 

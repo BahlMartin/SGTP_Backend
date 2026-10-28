@@ -176,6 +176,7 @@ class TicketHistorialDetailSerializer(TicketDetailSerializer):
     personal_box_matricula = serializers.SerializerMethodField()
     fecha_hora_atencion_box = serializers.SerializerMethodField()
     motivo_cierre_box = serializers.SerializerMethodField()
+    observaciones_cierre_box = serializers.SerializerMethodField()
 
     class Meta(TicketDetailSerializer.Meta):
         fields = TicketDetailSerializer.Meta.fields + [
@@ -183,6 +184,7 @@ class TicketHistorialDetailSerializer(TicketDetailSerializer):
             'personal_box_matricula',
             'fecha_hora_atencion_box',
             'motivo_cierre_box',
+            'observaciones_cierre_box',
         ]
         read_only_fields = fields
 
@@ -221,6 +223,10 @@ class TicketHistorialDetailSerializer(TicketDetailSerializer):
     def get_motivo_cierre_box(self, obj: Ticket) -> str:
         asig = self._get_ultima_asignacion(obj)
         return asig.motivo_cierre if asig and asig.motivo_cierre else ""
+
+    def get_observaciones_cierre_box(self, obj: Ticket) -> str:
+        asig = self._get_ultima_asignacion(obj)
+        return asig.observaciones_cierre if asig and getattr(asig, 'observaciones_cierre', None) else ""
 
 
 # Alias

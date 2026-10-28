@@ -103,6 +103,13 @@ class AsignacionesBox(models.Model):
         blank=True,
         verbose_name="Motivo de Finalización o Cierre de Atención"
     )
+    observaciones_cierre = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        null=True,
+        verbose_name="Observaciones al cierre o cancelación de atención"
+    )
     fecha_hora_inicio = models.DateTimeField(
         auto_now_add=True,
         db_index=True,

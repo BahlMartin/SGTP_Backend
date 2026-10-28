@@ -478,7 +478,8 @@ class ReportPdfGenerator:
                 Paragraph("<b>Técnico / Profesional</b>", estilo_encabezado_tabla),
                 Paragraph("<b>Matrícula</b>", estilo_encabezado_tabla),
                 Paragraph("<b>Correo Institucional</b>", estilo_encabezado_tabla),
-                Paragraph("<b>Pacientes Atendidos</b>", estilo_encabezado_tabla),
+                Paragraph("<b>Atendidos</b>", estilo_encabezado_tabla),
+                Paragraph("<b>Ausentes</b>", estilo_encabezado_tabla),
                 Paragraph("<b>Tiempo Promedio</b>", estilo_encabezado_tabla),
             ]
         ]
@@ -487,13 +488,14 @@ class ReportPdfGenerator:
                 Paragraph(f"<b>{bx['nombre_completo']}</b>", estilo_celda),
                 Paragraph(str(bx['matricula']), estilo_celda_centro),
                 Paragraph(str(bx['email']), estilo_celda),
-                Paragraph(f"<b>{bx['pacientes_atendidos']}</b>", estilo_celda_centro),
+                Paragraph(f"<font color='#0D9488'><b>{bx['pacientes_atendidos']}</b></font>", estilo_celda_centro),
+                Paragraph(f"<font color='#E11D48'><b>{bx.get('pacientes_ausentes', 0)}</b></font>", estilo_celda_centro),
                 Paragraph(f"{bx['promedio_atencion_minutos']} min", estilo_celda_centro),
             ])
         if len(box_data) == 1:
-            box_data.append([Paragraph("Sin atenciones registradas en box", estilo_celda), Paragraph("—", estilo_celda_centro), Paragraph("—", estilo_celda), Paragraph("0", estilo_celda_centro), Paragraph("—", estilo_celda_centro)])
+            box_data.append([Paragraph("Sin atenciones registradas en box", estilo_celda), Paragraph("—", estilo_celda_centro), Paragraph("—", estilo_celda), Paragraph("0", estilo_celda_centro), Paragraph("0", estilo_celda_centro), Paragraph("—", estilo_celda_centro)])
 
-        tabla_bx = Table(box_data, colWidths=[153, 75, 145, 80, 70])
+        tabla_bx = Table(box_data, colWidths=[135, 65, 128, 65, 65, 65])
         tabla_bx.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0D9488')),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CBD5E1')),

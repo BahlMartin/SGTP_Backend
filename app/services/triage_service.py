@@ -172,11 +172,12 @@ class TriageService:
         cls,
         box_id: int,
         personal: Personal,
-        motivo_cierre: str = MotivoCierreBox.FINALIZADO
+        motivo_cierre: str = MotivoCierreBox.FINALIZADO,
+        observaciones_cierre: str = ''
     ) -> AsignacionesBox:
         """
         Finaliza la atención en curso de un Box:
-        1. Cierra la asignación activa con timestamp UTC y motivo.
+        1. Cierra la asignación activa con timestamp UTC, motivo y observaciones opcionales.
         2. Pasa el Ticket a 'Finalizado' (o 'Cancelado').
         3. Pone el Box en estado 'Disponible'.
         """
@@ -198,7 +199,8 @@ class TriageService:
         if asignacion:
             asignacion.fecha_hora_final = ahora
             asignacion.motivo_cierre = motivo_cierre
-            asignacion.save(update_fields=['fecha_hora_final', 'motivo_cierre'])
+            asignacion.observaciones_cierre = (observaciones_cierre or '').strip()
+            asignacion.save(update_fields=['fecha_hora_final', 'motivo_cierre', 'observaciones_cierre'])
 
             if asignacion.ticket:
                 ticket = Ticket.objects.select_for_update().get(pk=asignacion.ticket.pk)

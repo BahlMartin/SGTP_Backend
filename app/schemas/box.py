@@ -98,6 +98,7 @@ class AsignacionesBoxSerializer(serializers.ModelSerializer):
             'ticket',
             'ticket_totem',
             'motivo_cierre',
+            'observaciones_cierre',
             'fecha_hora_inicio',
             'fecha_hora_final',
         ]
@@ -107,6 +108,12 @@ class CerrarAtencionSerializer(serializers.Serializer):
     motivo_cierre = serializers.ChoiceField(
         choices=MotivoCierreBox.choices,
         default=MotivoCierreBox.FINALIZADO
+    )
+    observaciones_cierre = serializers.CharField(
+        max_length=255,
+        required=False,
+        allow_blank=True,
+        default=''
     )
 
 

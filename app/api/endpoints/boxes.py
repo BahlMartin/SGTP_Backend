@@ -18,6 +18,7 @@ from app.models.box import (
     Box,
     AsignacionesBox,
     EstadoBox,
+    MotivoCierreBox,
 )
 from app.models.user import RolPersonal
 from app.schemas.box import (
@@ -248,31 +249,47 @@ class BoxViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='cerrar-atencion', permission_classes=[IsBoxOrJefa])
     def cerrar_atencion(self, request: Request, pk: str = None) -> Response:
         """
-        Finaliza la atención en curso en el Box y lo deja en estado 'Disponible'.
+        Finaliza o cancela la atención en curso en el Box y lo deja en estado 'Disponible'.
         """
         box = self.get_object()
         serializer = CerrarAtencionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        asignacion = TriageService.cerrar_atencion(
-            box_id=box.id,
-            personal=request.user,
-            motivo_cierre=serializer.validated_data.get('motivo_cierre')
-        )
+        motivo_cierre = serializer.validated_data.get('motivo_cierre', MotivoCierreBox.FINALIZADO)
+        observaciones_cierre = serializer.validated_data.get('observaciones_cierre', '')
+
+        try:
+            asignacion = TriageService.cerrar_atencion(
+                box_id=box.id,
+                personal=request.user,
+                motivo_cierre=motivo_cierre,
+                observaciones_cierre=observaciones_cierre
+            )
+        except DjangoValidationError as e:
+            detail_msg = e.messages[0] if hasattr(e, 'messages') and e.messages else str(e)
+            return Response({"detail": detail_msg}, status=status.HTTP_400_BAD_REQUEST)
 
         # Refrescar box
         box.refresh_from_db()
 
         # Notificar al WebSocket que el box volvió a estar disponible
         notificar_monitor_operativo_box(box)
-        # Notifica a Secretaría/Jefa que las estadísticas (Atendidos, Espera Promedio) cambiaron
+        # Notifica a Secretaría/Jefa que las estadísticas (Atendidos, Cancelados, Espera Promedio) cambiaron
         notificar_actualizacion_reportes()
-        # Notifica a Jefa/Laboratorio que los estudios fueron consolidados y finalizados tras la consulta en Box
-        notificar_actualizacion_estudios_laboratorio(ticket=getattr(asignacion, 'ticket', None))
+        # Si fue atención finalizada (no cancelada por ausencia), notificar estudios de laboratorio
+        if motivo_cierre != MotivoCierreBox.CANCELADO:
+            notificar_actualizacion_estudios_laboratorio(ticket=getattr(asignacion, 'ticket', None))
+
+        es_cancelado = motivo_cierre == MotivoCierreBox.CANCELADO
+        mensaje_respuesta = (
+            f"Turno cancelado por ausencia del paciente en Box {box.numero}. El box se encuentra disponible."
+            if es_cancelado
+            else f"Atención del Box {box.numero} finalizada."
+        )
 
         return Response(
             {
-                "mensaje": f"Atención del Box {box.numero} finalizada.",
+                "mensaje": mensaje_respuesta,
                 "box": BoxSerializer(box).data,
                 "asignacion": AsignacionesBoxSerializer(asignacion).data
             },

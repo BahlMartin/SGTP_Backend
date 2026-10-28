@@ -10,7 +10,7 @@ from django.utils import timezone
 from django.core.exceptions import ValidationError, PermissionDenied, ObjectDoesNotExist
 
 from app.models.user import Personal, RolPersonal
-from app.models.ticket import Ticket, TicketEstudios, EstadoEstudio
+from app.models.ticket import Ticket, TicketEstudios, EstadoEstudio, EstadoTicket
 from app.models.box import AsignacionesBox, MotivoCierreBox
 
 
@@ -99,6 +99,16 @@ class TicketService:
         )
 
         # 2. Conteo de pacientes atendidos por personal de box con cierre 'Finalizado'
+        # 2. Conteo de pacientes atendidos y ausentes por personal de box
+        ausentes_por_box = dict(
+            AsignacionesBox.objects.filter(
+                fecha_hora_inicio__range=(inicio_dia, fin_dia),
+                motivo_cierre=MotivoCierreBox.CANCELADO
+            )
+            .exclude(ticket_id__isnull=True)
+            .values_list('personal_id')
+            .annotate(total=Count('ticket_id', distinct=True))
+        )
         atenciones_por_box = dict(
             AsignacionesBox.objects.filter(
                 fecha_hora_inicio__range=(inicio_dia, fin_dia),
@@ -116,6 +126,7 @@ class TicketService:
         for p in personal_qs:
             tickets_emitidos = tickets_por_admision.get(p.id_personal, 0)
             pacientes_atendidos = atenciones_por_box.get(p.id_personal, 0)
+            pacientes_ausentes = ausentes_por_box.get(p.id_personal, 0)
 
             lista_personal.append({
                 'id': p.id_personal,
@@ -131,6 +142,7 @@ class TicketService:
                 'fin_turno': str(p.fin_turno) if p.fin_turno else None,
                 'tickets_emitidos': tickets_emitidos,
                 'pacientes_atendidos': pacientes_atendidos,
+                'pacientes_ausentes': pacientes_ausentes,
             })
 
         return {
@@ -138,6 +150,7 @@ class TicketService:
             'personal': lista_personal,
             'tickets_por_personal': {str(item['id']): item['tickets_emitidos'] for item in lista_personal},
             'atenciones_por_personal': {str(item['id']): item['pacientes_atendidos'] for item in lista_personal},
+            'ausentes_por_personal': {str(item['id']): item['pacientes_ausentes'] for item in lista_personal},
         }
 
     @classmethod
@@ -162,6 +175,8 @@ class TicketService:
             ticket__is_deleted=False
         ).exclude(
             estado=EstadoEstudio.CANCELADO
+        ).exclude(
+            ticket__estado=EstadoTicket.CANCELADO
         )
 
         total_estudios_realizados = qs.count()
