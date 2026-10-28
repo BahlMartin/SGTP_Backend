@@ -1,6 +1,8 @@
 """
 Controlador de Endpoints para Gestión de Usuarios / Personal Asistencial y Habilitaciones.
 """
+from datetime import datetime, timedelta, time
+from django.db import transaction
 from django.urls import path, include
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -107,6 +109,67 @@ class HabilitacionHorariaViewSet(viewsets.ModelViewSet):
 
         return qs
 
+    def create(self, request, *args, **kwargs):
+        """
+        Permite la creación de habilitaciones horarias.
+        Si la franja horaria cruza la medianoche (hora_inicio >= hora_fin),
+        desglosa automáticamente en dos habilitaciones correlativas:
+        - Tramo 1 (Día D): hora_inicio a 23:59:59
+        - Tramo 2 (Día D+1): 00:00:00 a hora_fin
+        """
+        hora_inicio_str = request.data.get('hora_inicio')
+        hora_fin_str = request.data.get('hora_fin')
+        fecha_str = request.data.get('fecha')
+
+        if not hora_inicio_str or not hora_fin_str or not fecha_str:
+            return super().create(request, *args, **kwargs)
+
+        h_ini = str(hora_inicio_str)[:5]
+        h_fin = str(hora_fin_str)[:5]
+
+        if h_ini >= h_fin:
+            fecha_d1 = datetime.strptime(str(fecha_str)[:10], '%Y-%m-%d').date()
+            fecha_d2 = fecha_d1 + timedelta(days=1)
+            personal_id = request.data.get('personal')
+            motivo = request.data.get('motivo', 'Extensión nocturna extraordinaria')
+
+            with transaction.atomic():
+                hab1 = HabilitacionHoraria(
+                    personal_id=personal_id,
+                    aprobado_por=request.user,
+                    fecha=fecha_d1,
+                    hora_inicio=f"{h_ini}:00" if len(h_ini) == 5 else hora_inicio_str,
+                    hora_fin='23:59:59',
+                    motivo=f"{motivo} (Tramo 1/2)",
+                    activa=True
+                )
+                hab1.clean()
+                hab1.save()
+
+                hab2 = HabilitacionHoraria(
+                    personal_id=personal_id,
+                    aprobado_por=request.user,
+                    fecha=fecha_d2,
+                    hora_inicio='00:00:00',
+                    hora_fin=f"{h_fin}:00" if len(h_fin) == 5 else hora_fin_str,
+                    motivo=f"{motivo} (Tramo 2/2)",
+                    activa=True
+                )
+                hab2.clean()
+                hab2.save()
+
+            serializer1 = self.get_serializer(hab1)
+            serializer2 = self.get_serializer(hab2)
+            return Response(
+                {
+                    "detail": "Extensión nocturna autorizada en 2 tramos correlativos (ambos días marcados).",
+                    "tramos": [serializer1.data, serializer2.data]
+                },
+                status=status.HTTP_201_CREATED
+            )
+
+        return super().create(request, *args, **kwargs)
+
     def perform_create(self, serializer: HabilitacionHorariaSerializer) -> None:
         serializer.save(aprobado_por=self.request.user)
 
@@ -124,6 +187,116 @@ class HabilitacionHorariaViewSet(viewsets.ModelViewSet):
             {
                 "detail": "Habilitación horaria reactivada exitosamente.",
                 "habilitacion": serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    @action(detail=False, methods=['post'], url_path='revocar-lote')
+    def revocar_lote(self, request) -> Response:
+        """
+        Endpoint atómico y transaccional para revocar habilitaciones horarias masivas:
+        Alcances soportados:
+        - 'todas': Revoca todas las habilitaciones activas de un mes (o históricas) para un personal.
+        - 'semana': Revoca todas las habilitaciones de la semana asistencial que contiene a 'fecha'.
+        - 'rango': Revoca todas las habilitaciones entre 'fecha_desde' y 'fecha_hasta'.
+        - 'dia': Revoca todas las habilitaciones de una 'fecha' específica.
+        - 'ids': Revoca la lista explícita de IDs en 'ids'.
+        """
+        personal_id = request.data.get('personal_id')
+        alcance = request.data.get('alcance', 'dia')
+
+        if not personal_id:
+            return Response(
+                {"error": "Debe especificar 'personal_id'."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        qs = HabilitacionHoraria.objects.filter(personal_id=personal_id, activa=True)
+
+        if alcance == 'todas':
+            anio = request.data.get('anio')
+            mes = request.data.get('mes')
+            if anio:
+                qs = qs.filter(fecha__year=anio)
+            if mes:
+                qs = qs.filter(fecha__month=mes)
+        elif alcance == 'semana':
+            fecha_str = request.data.get('fecha')
+            if not fecha_str:
+                return Response(
+                    {"error": "Debe especificar 'fecha' para alcance de semana."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            fecha_ref = datetime.strptime(str(fecha_str)[:10], '%Y-%m-%d').date()
+            dia_semana = fecha_ref.weekday()  # 0 = Lunes, 6 = Domingo
+            lunes = fecha_ref - timedelta(days=dia_semana)
+            domingo = lunes + timedelta(days=6)
+            qs = qs.filter(fecha__range=[lunes, domingo])
+        elif alcance == 'rango':
+            fecha_desde = request.data.get('fecha_desde')
+            fecha_hasta = request.data.get('fecha_hasta')
+            if not fecha_desde or not fecha_hasta:
+                return Response(
+                    {"error": "Debe especificar 'fecha_desde' y 'fecha_hasta'."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            qs = qs.filter(fecha__range=[fecha_desde, fecha_hasta])
+        elif alcance == 'dia':
+            fecha_str = request.data.get('fecha')
+            if not fecha_str:
+                return Response(
+                    {"error": "Debe especificar 'fecha'."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            qs = qs.filter(fecha=fecha_str)
+        elif alcance == 'ids':
+            ids = request.data.get('ids', [])
+            if not ids:
+                return Response(
+                    {"error": "Debe proveer una lista no vacía de 'ids'."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            qs = qs.filter(id__in=ids)
+        else:
+            return Response(
+                {"error": f"Alcance '{alcance}' no soportado."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        with transaction.atomic():
+            habilitaciones = list(qs)
+            count = len(habilitaciones)
+            if count == 0:
+                return Response(
+                    {
+                        "detail": "No se encontraron habilitaciones horarias activas para el criterio seleccionado.",
+                        "revocadas_count": 0,
+                        "alcance": alcance
+                    },
+                    status=status.HTTP_200_OK
+                )
+
+            planificaciones_afectadas = set()
+            for hab in habilitaciones:
+                if hab.planificacion_id:
+                    planificaciones_afectadas.add(hab.planificacion)
+                hab.delete()
+
+            for plan in planificaciones_afectadas:
+                habs_restantes = plan.habilitaciones_diarias.filter(activa=True)
+                total_horas = 0.0
+                for h in habs_restantes:
+                    h_ini = h.hora_inicio.hour + h.hora_inicio.minute / 60.0
+                    h_fin = h.hora_fin.hour + h.hora_fin.minute / 60.0
+                    total_horas += max(0.0, h_fin - h_ini)
+                plan.total_horas_mensual = round(total_horas, 2)
+                plan.save(update_fields=['total_horas_mensual'])
+
+        return Response(
+            {
+                "detail": f"Se revocaron exitosamente {count} autorizaciones de horas extras.",
+                "revocadas_count": count,
+                "alcance": alcance
             },
             status=status.HTTP_200_OK
         )

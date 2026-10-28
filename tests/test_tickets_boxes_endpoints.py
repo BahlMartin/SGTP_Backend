@@ -315,5 +315,80 @@ class TicketsBoxesEndpointsTestCase(TestCase):
         self.assertIsNone(resp_post.data['personal_actual_detalle'])
         self.assertEqual(resp_post.data['estado'], EstadoBox.DISPONIBLE)
 
+    def test_tomar_box_fuera_de_servicio_conserva_estado_y_bloquea_llamado(self):
+        """
+        Verifica que cuando un técnico se posiciona en un box Fuera de servicio:
+        - El box conserva el estado 'Fuera de servicio' y registra personal_actual.
+        - El técnico no puede cambiar el estado a 'Disponible' (solo Jefa/Admin).
+        - El técnico no puede llamar pacientes desde ese box mientras esté Fuera de servicio.
+        - La Jefa sí puede habilitar el box ('Disponible') manteniendo al técnico posicionado.
+        """
+        self.box2.estado = EstadoBox.FUERA_DE_SERVICIO
+        self.box2.save(update_fields=['estado'])
+
+        Ticket.objects.create(
+            num_totem='T-900',
+            paciente=self.paciente,
+            personal_admision=self.jefa_user,
+            clasificacion_triage=ClasificacionTriage.GUARDIA,
+            estado=EstadoTicket.PENDIENTE
+        )
+
+        # 1. Técnico se posiciona en el box fuera de servicio
+        self.client.force_authenticate(user=self.box_user)
+        resp_tomar = self.client.post(f'/app/boxes/{self.box2.id}/tomar-box/')
+        self.assertEqual(resp_tomar.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp_tomar.data['estado'], EstadoBox.FUERA_DE_SERVICIO)
+        self.assertEqual(resp_tomar.data['personal_actual'], self.box_user.id_personal)
+        self.assertIsNotNone(resp_tomar.data['personal_actual_detalle'])
+
+        # 2. Técnico intenta habilitar el box por su cuenta -> 403 Forbidden
+        resp_patch_box = self.client.patch(
+            f'/app/boxes/{self.box2.id}/',
+            {'estado': EstadoBox.DISPONIBLE},
+            format='json'
+        )
+        self.assertEqual(resp_patch_box.status_code, status.HTTP_403_FORBIDDEN)
+
+        # 3. Técnico intenta llamar paciente desde box fuera de servicio -> 400 Bad Request
+        resp_llamar = self.client.post(f'/app/boxes/{self.box2.id}/llamar-siguiente/')
+        self.assertEqual(resp_llamar.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # 4. Jefa habilita el box -> 200 OK y el técnico sigue posicionado
+        self.client.force_authenticate(user=self.jefa_user)
+        resp_jefa_hab = self.client.patch(
+            f'/app/boxes/{self.box2.id}/',
+            {'estado': EstadoBox.DISPONIBLE},
+            format='json'
+        )
+        self.assertEqual(resp_jefa_hab.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp_jefa_hab.data['estado'], EstadoBox.DISPONIBLE)
+        self.assertEqual(resp_jefa_hab.data['personal_actual'], self.box_user.id_personal)
+
+    def test_listado_tickets_en_box_trae_solo_por_atender(self):
+        """Verifica que el listado de tickets para rol Box o ?por_atender=true excluya tickets finalizados/cancelados."""
+        t_pend = Ticket.objects.create(
+            num_totem='T-801',
+            paciente=self.paciente,
+            personal_admision=self.jefa_user,
+            clasificacion_triage=ClasificacionTriage.GUARDIA,
+            estado=EstadoTicket.PENDIENTE
+        )
+        t_fin = Ticket.objects.create(
+            num_totem='T-802',
+            paciente=self.paciente,
+            personal_admision=self.jefa_user,
+            clasificacion_triage=ClasificacionTriage.GUARDIA,
+            estado=EstadoTicket.FINALIZADO
+        )
+
+        self.client.force_authenticate(user=self.box_user)
+        resp = self.client.get('/app/tickets/?por_atender=true')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        results = resp.data.get('results', resp.data)
+        ids = [t['id_ticket'] for t in results]
+        self.assertIn(str(t_pend.id_ticket), ids)
+        self.assertNotIn(str(t_fin.id_ticket), ids)
+
 
 

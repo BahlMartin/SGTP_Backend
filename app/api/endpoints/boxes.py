@@ -2,8 +2,10 @@
 Controlador de Endpoints para Gestión y Operativa de Boxes de Atención.
 """
 from django.urls import path, include
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.routers import DefaultRouter
@@ -11,8 +13,6 @@ from rest_framework.permissions import IsAuthenticated
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
-from app.models.box import Box, AsignacionesBox, EstadoBox # Asegúrate de que estén importadas
-from app.schemas.box import BoxSerializer # Asegúrate de que esté importado
 
 from app.models.box import (
     Box,
@@ -29,8 +29,8 @@ from app.schemas.box import (
 from app.schemas.ticket import TicketDetailSerializer
 from app.services.triage_service import TriageService
 from app.core.permissions import IsBoxOrJefa
+from app.services.ticket_service import TicketService
 
-from app.services.ticket_service import TicketService # Importamos tu servicio de cálculo
 
 def notificar_actualizacion_reportes():
     """
@@ -49,8 +49,11 @@ def notificar_actualizacion_reportes():
     async_to_sync(channel_layer.group_send)('sgtp_reports_live', payload)
     async_to_sync(channel_layer.group_send)('sgtp_monitor_operativo', payload)
 
-# Función auxiliar para emitir al WebSocket tanto a Jefatura como a Boxes en línea
+
 def notificar_monitor_operativo_box(box_instance):
+    """
+    Emite al WebSocket tanto a Jefatura como a Boxes en línea.
+    """
     channel_layer = get_channel_layer()
     payload = {
         'type': 'broadcast_event',
@@ -60,9 +63,9 @@ def notificar_monitor_operativo_box(box_instance):
             'data': BoxSerializer(box_instance).data
         }
     }
-    # Emite a Monitor Operativo (Jefatura) y a Boxes Live (Técnicos)
     async_to_sync(channel_layer.group_send)('sgtp_monitor_operativo', payload)
     async_to_sync(channel_layer.group_send)('sgtp_boxes_live', payload)
+
 
 def notificar_actualizacion_estudios_laboratorio(ticket=None):
     """
@@ -90,21 +93,38 @@ class BoxViewSet(viewsets.ModelViewSet):
     queryset = Box.objects.all().select_related('personal_actual').order_by('numero')
     serializer_class = BoxSerializer
     permission_classes = [IsAuthenticated]
-    
+
     def perform_update(self, serializer):
+        user = self.request.user
+        instance = serializer.instance
+        nuevo_estado = serializer.validated_data.get('estado', instance.estado if instance else None)
+        estado_anterior = instance.estado if instance else None
+
+        es_rol_box = (
+            user.is_authenticated
+            and getattr(user, 'rol', None) == RolPersonal.BOX
+            and not getattr(user, 'is_superuser', False)
+        )
+
+        if es_rol_box and 'estado' in serializer.validated_data:
+            if (
+                estado_anterior == EstadoBox.FUERA_DE_SERVICIO
+                or nuevo_estado == EstadoBox.FUERA_DE_SERVICIO
+            ) and nuevo_estado != estado_anterior:
+                raise PermissionDenied(
+                    "Solo la Jefa de Laboratorio puede habilitar o poner fuera de servicio un box."
+                )
+
         box = serializer.save()
+
         # Si un técnico pone el box en disponible y no tenía personal asignado, vincularlo liberando otros boxes
-        if box.estado == EstadoBox.DISPONIBLE and self.request.user.is_authenticated:
-            if getattr(self.request.user, 'rol', None) == RolPersonal.BOX:
-                Box.objects.filter(personal_actual=self.request.user).exclude(pk=box.pk).update(personal_actual=None)
-                if box.personal_actual != self.request.user:
-                    box.personal_actual = self.request.user
-                    box.save(update_fields=['personal_actual'])
-        # Si se pone fuera de servicio, desasignar al personal
-        elif box.estado == EstadoBox.FUERA_DE_SERVICIO and box.personal_actual is not None:
-            box.personal_actual = None
-            box.save(update_fields=['personal_actual'])
-        # [NUEVO] Notificar al WebSocket sobre el cambio de estado
+        if box.estado == EstadoBox.DISPONIBLE and es_rol_box:
+            Box.objects.filter(personal_actual=user).exclude(pk=box.pk).update(personal_actual=None)
+            if box.personal_actual != user:
+                box.personal_actual = user
+                box.save(update_fields=['personal_actual'])
+
+        # Notificar al WebSocket sobre el cambio de estado
         notificar_monitor_operativo_box(box)
 
     @action(detail=True, methods=['post'], url_path='tomar-box', permission_classes=[IsBoxOrJefa])
@@ -112,37 +132,47 @@ class BoxViewSet(viewsets.ModelViewSet):
         """
         Asigna inmediatamente al técnico solicitante al box físico seleccionado,
         liberando cualquier otro box previo para garantizar exclusividad 1 a 1.
+        Si el box se encuentra 'Fuera de servicio', conserva dicho estado hasta que la Jefa lo habilite.
         """
         box = self.get_object()
         personal = request.user
 
-        # Liberar al personal de cualquier otro box previo
-        Box.objects.filter(personal_actual=personal).exclude(pk=box.pk).update(personal_actual=None)
+        # Liberar al personal de cualquier otro box previo y notificar a WS
+        boxes_previos = list(Box.objects.filter(personal_actual=personal).exclude(pk=box.pk))
+        if boxes_previos:
+            Box.objects.filter(personal_actual=personal).exclude(pk=box.pk).update(personal_actual=None)
+            for b_prev in boxes_previos:
+                b_prev.personal_actual = None
+                notificar_monitor_operativo_box(b_prev)
 
         box.personal_actual = personal
-        # Si el box estaba fuera de servicio y el técnico se posiciona en él, pasa a Disponible
-        if box.estado == EstadoBox.FUERA_DE_SERVICIO:
-            box.estado = EstadoBox.DISPONIBLE
-            box.save(update_fields=['personal_actual', 'estado'])
-        else:
-            box.save(update_fields=['personal_actual'])
-        # [NUEVO] Notificar al WebSocket que un técnico tomó el box            
+        box.save(update_fields=['personal_actual'])
+
+        # Notificar al WebSocket que un técnico se posicionó en el box
         notificar_monitor_operativo_box(box)
         return Response(BoxSerializer(box).data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'], url_path='llamar-siguiente', permission_classes=[IsBoxOrJefa])
     def llamar_siguiente(self, request: Request, pk: str = None) -> Response:
         """
-        Llama al siguiente paciente disponible según el algoritmo multibox:
+        Llama al siguiente paciente disponible según el algoritmo multibox,
+        o convoca directamente a un paciente específico si se envía 'ticket_id' (ignorando triage).
         Box 1 prioriza Discapacidad; Boxes 2..N excluyen Discapacidad.
         Ejecución atómica con select_for_update(skip_locked=True).
         """
         box = self.get_object()
-        ticket, asignacion = TriageService.llamar_siguiente_paciente(
-            box_id=box.id,
-            personal=request.user
-        )
-        
+        ticket_id = request.data.get('ticket_id') if isinstance(request.data, dict) else None
+
+        try:
+            ticket, asignacion = TriageService.llamar_siguiente_paciente(
+                box_id=box.id,
+                personal=request.user,
+                ticket_id=ticket_id
+            )
+        except DjangoValidationError as e:
+            detail_msg = e.messages[0] if hasattr(e, 'messages') and e.messages else str(e)
+            return Response({"detail": detail_msg}, status=status.HTTP_400_BAD_REQUEST)
+
         if not ticket:
             return Response(
                 {
@@ -152,31 +182,30 @@ class BoxViewSet(viewsets.ModelViewSet):
                 },
                 status=status.HTTP_200_OK
             )
-        
-        if ticket:
-            # Notificamos a la cola de espera y al monitor de jefatura que este ticket ya fue llamado
-            channel_layer = get_channel_layer()
-            llamado_payload = {
-                'type': 'broadcast_event',
-                'payload': {
-                    'event': 'TICKET_LLAMADO',
-                    'action': 'TICKET_LLAMADO',
-                    'data': {
-                        'ticket_id': str(ticket.id_ticket),
-                        'box_numero': box.numero,
-                        'llamado': ticket.num_totem,
-                        'ticket': TicketDetailSerializer(ticket).data
-                    }
+
+        # Notificamos a la cola de espera y al monitor de jefatura que este ticket ya fue llamado
+        channel_layer = get_channel_layer()
+        llamado_payload = {
+            'type': 'broadcast_event',
+            'payload': {
+                'event': 'TICKET_LLAMADO',
+                'action': 'TICKET_LLAMADO',
+                'data': {
+                    'ticket_id': str(ticket.id_ticket),
+                    'box_numero': box.numero,
+                    'llamado': ticket.num_totem,
+                    'ticket': TicketDetailSerializer(ticket).data
                 }
             }
-            async_to_sync(channel_layer.group_send)('sgtp_queue_live', llamado_payload)
-            async_to_sync(channel_layer.group_send)('sgtp_monitor_operativo', llamado_payload)
+        }
+        async_to_sync(channel_layer.group_send)('sgtp_queue_live', llamado_payload)
+        async_to_sync(channel_layer.group_send)('sgtp_monitor_operativo', llamado_payload)
 
-            # Notificamos a boxes y monitoreo que el box ahora está en atención
-            box.refresh_from_db()
-            notificar_monitor_operativo_box(box)
+        # Notificamos a boxes y monitoreo que el box ahora está en atención
+        box.refresh_from_db()
+        notificar_monitor_operativo_box(box)
+        notificar_actualizacion_reportes()
 
-        
         return Response(
             {
                 "mensaje": f"Paciente llamado con éxito al Box {box.numero}.",
@@ -197,7 +226,6 @@ class BoxViewSet(viewsets.ModelViewSet):
         serializer = ModificarEstudiosBoxSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        from django.core.exceptions import ValidationError as DjangoValidationError
         try:
             ticket = TriageService.modificar_estudios_atencion(
                 box_id=box.id,
@@ -235,7 +263,7 @@ class BoxViewSet(viewsets.ModelViewSet):
         # Refrescar box
         box.refresh_from_db()
 
-        # Notificar al WebSocket que el box volvio a estar disponible
+        # Notificar al WebSocket que el box volvió a estar disponible
         notificar_monitor_operativo_box(box)
         # Notifica a Secretaría/Jefa que las estadísticas (Atendidos, Espera Promedio) cambiaron
         notificar_actualizacion_reportes()
@@ -250,7 +278,6 @@ class BoxViewSet(viewsets.ModelViewSet):
             },
             status=status.HTTP_200_OK
         )
-        
 
     @action(detail=False, methods=['get'], url_path='estado-general')
     def estado_general(self, request: Request) -> Response:

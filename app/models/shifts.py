@@ -71,8 +71,8 @@ class PlanificacionHorasExtras(models.Model):
         super().clean()
         if self.aprobado_por and self.aprobado_por.rol not in [RolPersonal.JEFA, RolPersonal.ADMIN]:
             raise ValidationError("Solo una usuaria con rol 'Jefa' o 'Admin' puede autorizar horas extras.")
-        if self.hora_inicio and self.hora_fin and self.hora_inicio >= self.hora_fin:
-            raise ValidationError("La hora de inicio debe ser estrictamente anterior a la hora de fin.")
+        if self.hora_inicio and self.hora_fin and self.hora_inicio == self.hora_fin:
+            raise ValidationError("La hora de inicio no puede ser idéntica a la hora de fin.")
 
 
 class HabilitacionHoraria(models.Model):

@@ -51,11 +51,7 @@ class BoxSerializer(serializers.ModelSerializer):
         ]
 
     def get_personal_actual_detalle(self, obj: Box):
-        # Si el box está fuera de servicio, nunca tiene personal operativo
-        if obj.estado == EstadoBox.FUERA_DE_SERVICIO:
-            return None
-
-        # 1. Asignación directa persistida en el Box
+        # 1. Asignación directa persistida en el Box (incluso si se encuentra fuera de servicio)
         if obj.personal_actual:
             return PersonalBoxSummarySerializer(obj.personal_actual).data
 

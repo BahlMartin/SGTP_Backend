@@ -18,6 +18,7 @@ from app.models.ticket import (
     TicketEstudios,
     EstadoTicket,
 )
+from app.models.user import RolPersonal
 from app.models.studies import Estudios
 from app.schemas.ticket import (
     TicketCreateSerializer,
@@ -30,9 +31,10 @@ from app.services.triage_service import construir_orden_prioridad_case
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
+
 def notificar_eventos_ticket(ticket_instance, accion='NEW_TICKET'):
     """
-    Notifica a varios consumidores (Jefa, Pantallas de Espera, Boxes)
+    Notifica a varios consumidores (Jefa, Pantallas de Espera, Boxes, Reportes)
     sobre la creación o cambio de un ticket.
     """
     channel_layer = get_channel_layer()
@@ -41,19 +43,21 @@ def notificar_eventos_ticket(ticket_instance, accion='NEW_TICKET'):
         'payload': {
             'event': 'TICKET_CREATED',
             'action': accion,
-            'data': TicketDetailSerializer(ticket_instance).data 
+            'data': TicketDetailSerializer(ticket_instance).data
         }
     }
-    
+
     # 1. Notificar al panel de la Jefa (Monitor Operativo)
     async_to_sync(channel_layer.group_send)('sgtp_monitor_operativo', payload)
-    
+
     # 2. Notificar a las Pantallas de Sala de Espera / Cola Multibox
     async_to_sync(channel_layer.group_send)('sgtp_queue_live', payload)
-    
-    # 3. Notificar a los Técnicos (Últimos ingresos)
+
+    # 3. Notificar a los Técnicos / Admisión (Últimos ingresos)
     async_to_sync(channel_layer.group_send)('sgtp_tickets_live', payload)
 
+    # 4. Notificar a la vista de Reportes (Secretaría / Jefa)
+    async_to_sync(channel_layer.group_send)('sgtp_reports_live', payload)
 
 
 class TicketViewSet(viewsets.ModelViewSet):
@@ -74,6 +78,21 @@ class TicketViewSet(viewsets.ModelViewSet):
     )
     permission_classes = [IsAuthenticated]
 
+    def get_queryset(self):
+        qs = super().get_queryset().filter(is_deleted=False)
+        if self.action == 'list':
+            por_atender = self.request.query_params.get('por_atender')
+            es_rol_box = getattr(self.request.user, 'rol', None) == RolPersonal.BOX
+            if por_atender in ('true', '1', 'True') or es_rol_box:
+                qs = qs.filter(estado__in=[EstadoTicket.PENDIENTE, EstadoTicket.EN_ATENCION])
+            else:
+                estado_param = self.request.query_params.get('estado')
+                if estado_param:
+                    estados = [e.strip() for e in estado_param.split(',') if e.strip()]
+                    if estados:
+                        qs = qs.filter(estado__in=estados)
+        return qs
+
     def get_permissions(self):
         if self.action in ['rendimiento_personal', 'resumen_estudios', 'tickets_por_personal']:
             return [IsAuthenticated(), IsJefaRole()]
@@ -90,14 +109,12 @@ class TicketViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer) -> None:
         # Obtenemos los estudios antes de extraerlos
         estudios_ids = serializer.validated_data.get('estudios_ids', [])
-        
-        # --- NUEVA VALIDACIÓN ---
+
         # Si la lista está vacía (no mandaron estudios), cortamos la ejecución y devolvemos error 400
         if not estudios_ids:
             raise ValidationError({
                 "detail": "No se puede admitir a un paciente ni crear un ticket sin seleccionar al menos un estudio."
             })
-        # ------------------------
 
         estudios_ids = serializer.validated_data.pop('estudios_ids', [])
         ticket = serializer.save(personal_admision=self.request.user)
@@ -114,13 +131,12 @@ class TicketViewSet(viewsets.ModelViewSet):
         self.perform_create(serializer)
         ticket = serializer.instance
 
-        # Notificar al WebSocket la creación del ticket (Cola, Boxes y Jefatura)
+        # Notificar al WebSocket la creación del ticket (Cola, Boxes, Jefatura y Reportes)
         notificar_eventos_ticket(ticket, 'NEW_TICKET')
 
         headers = self.get_success_headers(serializer.data)
         return Response(TicketDetailSerializer(ticket).data, status=status.HTTP_201_CREATED, headers=headers)
 
-        
     def update(self, request: Request, *args, **kwargs) -> Response:
         """Aplica la regla de inmutabilidad de 24h y exclusividad para el rol 'Jefa'."""
         partial = kwargs.pop('partial', False)

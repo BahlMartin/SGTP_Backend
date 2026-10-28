@@ -2,6 +2,7 @@
 Serializadores DRF para Gestión de Turnos, Horas Extras y Planificación Mensual.
 Desacoplado de user.py para garantizar mantenibilidad y responsabilidad única.
 """
+from datetime import time, timedelta
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from app.models.shifts import PlanificacionHorasExtras, HabilitacionHoraria
@@ -95,10 +96,14 @@ class PlanificacionHorasExtrasSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         aprobado_por = request.user if request and hasattr(request, 'user') else validated_data.get('aprobado_por')
 
-        # Calcular horas diarias
+        # Calcular horas diarias (soporta cruce de medianoche si hora_inicio >= hora_fin)
         h_ini = hora_inicio.hour + hora_inicio.minute / 60.0
         h_fin = hora_fin.hour + hora_fin.minute / 60.0
-        duracion_diaria = max(0.0, h_fin - h_ini)
+        if hora_inicio < hora_fin:
+            duracion_diaria = max(0.0, h_fin - h_ini)
+        else:
+            duracion_diaria = max(0.0, (24.0 - h_ini) + h_fin)
+
         total_horas = round(len(fechas) * duracion_diaria, 2)
 
         validated_data['total_horas_mensual'] = total_horas
@@ -114,19 +119,51 @@ class PlanificacionHorasExtrasSerializer(serializers.ModelSerializer):
         planificacion = PlanificacionHorasExtras.objects.create(**validated_data)
 
         # Generar detalle diario en HabilitacionHoraria
-        habilitaciones_a_crear = [
-            HabilitacionHoraria(
-                personal=personal,
-                planificacion=planificacion,
-                aprobado_por=aprobado_por,
-                fecha=fecha,
-                hora_inicio=hora_inicio,
-                hora_fin=hora_fin,
-                motivo=validated_data['motivo'],
-                activa=True
-            )
-            for fecha in fechas
-        ]
+        habilitaciones_a_crear = []
+        if hora_inicio < hora_fin:
+            for fecha in fechas:
+                habilitaciones_a_crear.append(
+                    HabilitacionHoraria(
+                        personal=personal,
+                        planificacion=planificacion,
+                        aprobado_por=aprobado_por,
+                        fecha=fecha,
+                        hora_inicio=hora_inicio,
+                        hora_fin=hora_fin,
+                        motivo=validated_data['motivo'],
+                        activa=True
+                    )
+                )
+        else:
+            # Desglose en 2 tramos por cada fecha seleccionada (cruza medianoche)
+            for fecha in fechas:
+                # Tramo 1: Día D hasta término de la jornada (23:59:59)
+                habilitaciones_a_crear.append(
+                    HabilitacionHoraria(
+                        personal=personal,
+                        planificacion=planificacion,
+                        aprobado_por=aprobado_por,
+                        fecha=fecha,
+                        hora_inicio=hora_inicio,
+                        hora_fin=time(23, 59, 59),
+                        motivo=f"{validated_data['motivo']} (Tramo 1/2)",
+                        activa=True
+                    )
+                )
+                # Tramo 2: Día D+1 desde inicio del nuevo día (00:00:00)
+                habilitaciones_a_crear.append(
+                    HabilitacionHoraria(
+                        personal=personal,
+                        planificacion=planificacion,
+                        aprobado_por=aprobado_por,
+                        fecha=fecha + timedelta(days=1),
+                        hora_inicio=time(0, 0, 0),
+                        hora_fin=hora_fin,
+                        motivo=f"{validated_data['motivo']} (Tramo 2/2)",
+                        activa=True
+                    )
+                )
+
         HabilitacionHoraria.objects.bulk_create(habilitaciones_a_crear)
         return planificacion
 
