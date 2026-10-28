@@ -11,67 +11,72 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.CreateModel(
-            name='PerfilEstudioPatron',
-            fields=[
-                ('id', models.AutoField(primary_key=True, serialize=False)),
-                ('nombre_perfil', models.CharField(max_length=150, unique=True, verbose_name='Nombre del Perfil o Combo')),
-                ('disparadores', models.JSONField(default=list, help_text="Lista de frases o palabras clave que activan este combo (ej: ['rutina', 'lab general'])")),
-                ('estudios_ids', models.JSONField(default=list, help_text='Lista de IDs numéricos de los estudios que componen este combo (ej: [1, 2, 5, 8])')),
-                ('frecuencia_uso', models.PositiveIntegerField(default=1, verbose_name='Frecuencia de Uso')),
-                ('activo', models.BooleanField(default=True, verbose_name='Perfil Habilitado')),
-                ('es_oficial', models.BooleanField(default=False, verbose_name='Definido por Supervisión / Jefa')),
-                ('fecha_creacion', models.DateTimeField(auto_now_add=True)),
-                ('fecha_actualizacion', models.DateTimeField(auto_now=True)),
+        migrations.SeparateDatabaseAndState(
+            state_operations=[
+                migrations.CreateModel(
+                    name='PerfilEstudioPatron',
+                    fields=[
+                        ('id', models.AutoField(primary_key=True, serialize=False)),
+                        ('nombre_perfil', models.CharField(max_length=150, unique=True, verbose_name='Nombre del Perfil o Combo')),
+                        ('disparadores', models.JSONField(default=list, help_text="Lista de frases o palabras clave que activan este combo (ej: ['rutina', 'lab general'])")),
+                        ('estudios_ids', models.JSONField(default=list, help_text='Lista de IDs numéricos de los estudios que componen este combo (ej: [1, 2, 5, 8])')),
+                        ('frecuencia_uso', models.PositiveIntegerField(default=1, verbose_name='Frecuencia de Uso')),
+                        ('activo', models.BooleanField(default=True, verbose_name='Perfil Habilitado')),
+                        ('es_oficial', models.BooleanField(default=False, verbose_name='Definido por Supervisión / Jefa')),
+                        ('fecha_creacion', models.DateTimeField(auto_now_add=True)),
+                        ('fecha_actualizacion', models.DateTimeField(auto_now=True)),
+                    ],
+                    options={
+                        'verbose_name': 'Perfil / Combo de Estudios',
+                        'verbose_name_plural': 'Perfiles y Combos de Rutina',
+                        'db_table': 'sgtp_perfiles_estudios_patron',
+                        'ordering': ['-frecuencia_uso', 'nombre_perfil'],
+                    },
+                ),
+                migrations.AlterField(
+                    model_name='ticketestudios',
+                    name='motivo_modificacion',
+                    field=models.CharField(blank=True, default='', max_length=255, null=True, verbose_name='Motivo de Modificación / Cancelación en Box'),
+                ),
+                migrations.CreateModel(
+                    name='CoocurrenciaEstudio',
+                    fields=[
+                        ('id', models.AutoField(primary_key=True, serialize=False)),
+                        ('estudio_a_id', models.IntegerField(db_index=True)),
+                        ('estudio_b_id', models.IntegerField(db_index=True)),
+                        ('veces_juntos', models.PositiveIntegerField(default=1)),
+                        ('indice_afinidad', models.FloatField(default=0.0)),
+                        ('fecha_actualizacion', models.DateTimeField(auto_now=True)),
+                    ],
+                    options={
+                        'verbose_name': 'Coocurrencia de Estudios',
+                        'verbose_name_plural': 'Matriz de Coocurrencias',
+                        'db_table': 'sgtp_estudios_coocurrencia',
+                        'ordering': ['-veces_juntos'],
+                        'unique_together': {('estudio_a_id', 'estudio_b_id')},
+                    },
+                ),
+                migrations.CreateModel(
+                    name='EstudioAliasAprendido',
+                    fields=[
+                        ('id', models.AutoField(primary_key=True, serialize=False)),
+                        ('texto_patron', models.CharField(db_index=True, max_length=255, verbose_name='Texto o Frase Normalizada')),
+                        ('veces_confirmado', models.PositiveIntegerField(default=1, verbose_name='Veces Confirmado por Personal')),
+                        ('confianza_score', models.FloatField(default=100.0, verbose_name='Puntaje de Confianza')),
+                        ('estado_revision', models.CharField(choices=[('APROBADO_AUTOMATICO', 'Aprobado Automático'), ('REVISADO_JEFA', 'Revisado por Jefa'), ('DESCARTADO', 'Descartado / Inactivo')], default='APROBADO_AUTOMATICO', max_length=30, verbose_name='Estado de Moderación')),
+                        ('fecha_primer_registro', models.DateTimeField(auto_now_add=True)),
+                        ('fecha_ultima_confirmacion', models.DateTimeField(auto_now=True)),
+                        ('estudio', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='alias_aprendidos', to='app.estudios', verbose_name='Estudio Oficial Asociado')),
+                    ],
+                    options={
+                        'verbose_name': 'Alias de Estudio Aprendido',
+                        'verbose_name_plural': 'Memoria de Alias Aprendidos',
+                        'db_table': 'sgtp_estudios_alias_aprendidos',
+                        'ordering': ['-veces_confirmado', 'texto_patron'],
+                        'unique_together': {('texto_patron', 'estudio')},
+                    },
+                ),
             ],
-            options={
-                'verbose_name': 'Perfil / Combo de Estudios',
-                'verbose_name_plural': 'Perfiles y Combos de Rutina',
-                'db_table': 'sgtp_perfiles_estudios_patron',
-                'ordering': ['-frecuencia_uso', 'nombre_perfil'],
-            },
-        ),
-        migrations.AlterField(
-            model_name='ticketestudios',
-            name='motivo_modificacion',
-            field=models.CharField(blank=True, default='', max_length=255, null=True, verbose_name='Motivo de Modificación / Cancelación en Box'),
-        ),
-        migrations.CreateModel(
-            name='CoocurrenciaEstudio',
-            fields=[
-                ('id', models.AutoField(primary_key=True, serialize=False)),
-                ('estudio_a_id', models.IntegerField(db_index=True)),
-                ('estudio_b_id', models.IntegerField(db_index=True)),
-                ('veces_juntos', models.PositiveIntegerField(default=1)),
-                ('indice_afinidad', models.FloatField(default=0.0)),
-                ('fecha_actualizacion', models.DateTimeField(auto_now=True)),
-            ],
-            options={
-                'verbose_name': 'Coocurrencia de Estudios',
-                'verbose_name_plural': 'Matriz de Coocurrencias',
-                'db_table': 'sgtp_estudios_coocurrencia',
-                'ordering': ['-veces_juntos'],
-                'unique_together': {('estudio_a_id', 'estudio_b_id')},
-            },
-        ),
-        migrations.CreateModel(
-            name='EstudioAliasAprendido',
-            fields=[
-                ('id', models.AutoField(primary_key=True, serialize=False)),
-                ('texto_patron', models.CharField(db_index=True, max_length=255, verbose_name='Texto o Frase Normalizada')),
-                ('veces_confirmado', models.PositiveIntegerField(default=1, verbose_name='Veces Confirmado por Personal')),
-                ('confianza_score', models.FloatField(default=100.0, verbose_name='Puntaje de Confianza')),
-                ('estado_revision', models.CharField(choices=[('APROBADO_AUTOMATICO', 'Aprobado Automático'), ('REVISADO_JEFA', 'Revisado por Jefa'), ('DESCARTADO', 'Descartado / Inactivo')], default='APROBADO_AUTOMATICO', max_length=30, verbose_name='Estado de Moderación')),
-                ('fecha_primer_registro', models.DateTimeField(auto_now_add=True)),
-                ('fecha_ultima_confirmacion', models.DateTimeField(auto_now=True)),
-                ('estudio', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='alias_aprendidos', to='app.estudios', verbose_name='Estudio Oficial Asociado')),
-            ],
-            options={
-                'verbose_name': 'Alias de Estudio Aprendido',
-                'verbose_name_plural': 'Memoria de Alias Aprendidos',
-                'db_table': 'sgtp_estudios_alias_aprendidos',
-                'ordering': ['-veces_confirmado', 'texto_patron'],
-                'unique_together': {('texto_patron', 'estudio')},
-            },
+            database_operations=[]
         ),
     ]
