@@ -457,7 +457,7 @@ class AuditService:
         return True
 
     @classmethod
-    def obtener_resumen_kpis(cls, queryset, fecha_desde=None, fecha_hasta=None) -> Dict[str, Any]:
+    def obtener_resumen_kpis(cls, queryset, fecha_desde=None, fecha_hasta=None, user=None) -> Dict[str, Any]:
         """Calcula los 6 KPIs principales para la cabecera interactiva."""
         hoy = timezone.localdate()
         qs_hoy = queryset.filter(fecha__date=hoy)
@@ -516,7 +516,10 @@ class AuditService:
             .distinct()
             .count()
         )
-        total_personal_activo = Personal.objects.filter(activo=True).count()
+        total_personal_qs = Personal.objects.filter(activo=True)
+        if user and getattr(user, 'rol', None) == RolPersonal.JEFA:
+            total_personal_qs = total_personal_qs.exclude(rol=RolPersonal.ADMIN)
+        total_personal_activo = total_personal_qs.count()
         usuarios_activos = max(usuarios_activos_24h, total_personal_activo)
 
         return {

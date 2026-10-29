@@ -157,7 +157,7 @@ class AuditoriaResumenKpisView(APIView):
         qs_base = AuditService.queryset_visible_para(request.user)
         qs_filtrado = aplicar_filtros_auditoria(qs_base, request.query_params)
 
-        kpis = AuditService.obtener_resumen_kpis(qs_filtrado)
+        kpis = AuditService.obtener_resumen_kpis(qs_filtrado, user=request.user)
         return Response(kpis, status=status.HTTP_200_OK)
 
 
