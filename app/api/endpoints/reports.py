@@ -1,5 +1,5 @@
 """
-Controlador de Endpoints para Reportes Diarios, Métricas y Descarga de PDF.
+Controlador de Endpoints para Reportes Diarios, Métricas y Descarga de PDF y Excel.
 """
 from django.http import HttpResponse
 from django.urls import path, include
@@ -17,14 +17,13 @@ from app.services.reports.report_facade import ReportFacade
 from app.core.permissions import IsSecretariaOrJefa, IsJefaRole
 from app.core.validators import validar_formato_fecha
 
-from rest_framework.permissions import IsAuthenticated
-from app.core.permissions import IsSecretariaOrJefa # Importas este permiso
-
 PARAMETRO_FECHA_CONSULTA = OpenApiParameter(
     'fecha',
     str,
     description='Fecha a consultar en formato YYYY-MM-DD'
 )
+
+XLSX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 
 
 class MetricasDiariasView(APIView):
@@ -64,12 +63,32 @@ class DescargarReportePdfView(APIView):
         return response
 
 
+class DescargarReporteExcelView(APIView):
+    """
+    Genera en tiempo real y descarga el libro oficial Excel (.xlsx) multi-hoja del reporte diario asistencial.
+    """
+    permission_classes = [IsAuthenticated, IsSecretariaOrJefa]
+
+    @extend_schema(
+        parameters=[PARAMETRO_FECHA_CONSULTA],
+        responses={(200, XLSX_CONTENT_TYPE): bytes}
+    )
+    def get(self, request: Request) -> HttpResponse:
+        fecha = validar_formato_fecha(request.query_params.get('fecha'))
+        metricas = ReportFacade.consolidar_metricas_diarias(fecha, incluir_detalle_excel=True)
+        excel_bytes = ReportFacade.generar_excel_reporte(metricas)
+
+        response = HttpResponse(excel_bytes, content_type=XLSX_CONTENT_TYPE)
+        response['Content-Disposition'] = f'attachment; filename="Reporte_Asistencial_{metricas["fecha"]}.xlsx"'
+        return response
+
+
 class DispararEnvioReporteView(APIView):
     """
     Dispara manualmente el proceso de consolidación, compilación y despacho por correo SMTP.
     Permitido para Secretaría, Jefa o Administrador.
     """
-    permission_classes = [IsAuthenticated, IsSecretariaOrJefa] # <--- CAMBIO REALIZADO
+    permission_classes = [IsAuthenticated, IsSecretariaOrJefa]
     serializer_class = DispararReporteRequestSerializer
 
     @extend_schema(request=DispararReporteRequestSerializer, responses={200: HistorialReporteDiarioSerializer})
@@ -108,6 +127,7 @@ class DispararEnvioReporteView(APIView):
             status=status.HTTP_200_OK if historial.exitoso else status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
+
 class HistorialReportesViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Trazabilidad de auditoría de reportes despachados automáticamente o por demanda.
@@ -125,6 +145,7 @@ router.register(r'historial', HistorialReportesViewSet, basename='historial-repo
 urlpatterns = [
     path('metricas-diarias/', MetricasDiariasView.as_view(), name='metricas-diarias'),
     path('descargar-pdf/', DescargarReportePdfView.as_view(), name='descargar-pdf'),
+    path('descargar-excel/', DescargarReporteExcelView.as_view(), name='descargar-excel'),
     path('disparar-envio/', DispararEnvioReporteView.as_view(), name='disparar-envio'),
     path('', include(router.urls)),
 ]
@@ -132,6 +153,7 @@ urlpatterns = [
 __all__ = [
     'MetricasDiariasView',
     'DescargarReportePdfView',
+    'DescargarReporteExcelView',
     'DispararEnvioReporteView',
     'HistorialReportesViewSet',
     'router',

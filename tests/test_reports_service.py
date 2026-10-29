@@ -1,7 +1,8 @@
-﻿"""
-Tests para Consolidación de Reportes Diarios, Generación de PDF y Despacho SMTP.
 """
-from datetime import timedelta
+Tests para Consolidación de Reportes Diarios, Generación de PDF, Excel (.xlsx) y Despacho SMTP.
+"""
+import io
+from datetime import time, timedelta
 from django.test import TestCase
 from django.utils import timezone
 from django.core import mail
@@ -9,6 +10,7 @@ from django.core import mail
 from app.models.user import Personal, RolPersonal
 from app.models.patient import Paciente
 from app.models.box import Box, AsignacionesBox
+from app.models.shifts import HabilitacionHoraria
 from app.models.ticket import (
     Ticket,
     TicketEstudios,
@@ -47,7 +49,7 @@ class ReportsServiceTestCase(TestCase):
             nombre='Gonzalo',
             apellidos='Morales'
         )
-        self.box = Box.objects.create(numero=1, activo=True)
+        self.box = Box.objects.create(numero=1, activo=True, discapacidad=True)
 
         # Crear ticket atendido
         self.ticket = Ticket.objects.create(
@@ -66,13 +68,16 @@ class ReportsServiceTestCase(TestCase):
         )
 
     def test_consolidacion_de_metricas(self):
-        """Verifica el cálculo de métricas de flujo asistencial."""
+        """Verifica el cálculo de métricas de flujo asistencial (modo liviano por defecto)."""
         metricas = ReportService.consolidar_metricas_diarias(timezone.now().date())
         self.assertEqual(metricas['total_emitidos'], 1)
         self.assertEqual(metricas['total_atendidos'], 1)
         self.assertEqual(metricas['total_criticos_atendidos'], 1)
         self.assertGreaterEqual(len(metricas['distribucion_triage']), 1)
         self.assertEqual(metricas['distribucion_triage'][0]['clasificacion_triage'], ClasificacionTriage.GUARDIA)
+        # Por defecto no debe incluir la sábana nominal de Excel
+        self.assertNotIn('detalle_tickets', metricas)
+        self.assertNotIn('horas_extras_dia', metricas)
 
     def test_generacion_de_pdf_valido(self):
         """El reporte PDF debe compilarse en memoria y ser un archivo PDF binario válido."""
@@ -83,6 +88,68 @@ class ReportsServiceTestCase(TestCase):
         self.assertGreater(len(pdf_bytes), 1000)
         # Todo PDF válido comienza con la firma mágica %PDF-
         self.assertTrue(pdf_bytes.startswith(b'%PDF-'))
+
+    def test_generacion_de_excel_seis_hojas_valido(self):
+        """El reporte Excel debe compilarse en memoria con las 6 hojas esperadas y datos consistentes."""
+        from openpyxl import load_workbook
+
+        # Crear una habilitación horaria (horas extras) para verificar su inclusión en la Hoja 4
+        HabilitacionHoraria.objects.create(
+            personal=self.jefa,
+            aprobado_por=self.jefa,
+            fecha=timezone.now().date(),
+            hora_inicio=time(16, 0),
+            hora_fin=time(19, 0),
+            motivo='Refuerzo de guardia vespertina',
+            activa=True,
+        )
+
+        metricas = ReportService.consolidar_metricas_diarias(
+            timezone.now().date(),
+            incluir_detalle_excel=True
+        )
+        self.assertIn('demanda_por_hora', metricas)
+        self.assertIn('resumen_obras_sociales', metricas)
+        self.assertIn('rendimiento_boxes_fisicos', metricas)
+        self.assertIn('horas_extras_dia', metricas)
+        self.assertEqual(len(metricas['horas_extras_dia']), 1)
+        self.assertEqual(metricas['horas_extras_dia'][0]['cantidad_horas'], 3.0)
+        self.assertIn('detalle_tickets', metricas)
+        self.assertEqual(len(metricas['detalle_tickets']), 1)
+
+        excel_bytes = ReportService.generar_excel_reporte(metricas)
+        self.assertIsInstance(excel_bytes, bytes)
+        # Todo archivo .xlsx (OOXML ZIP) comienza con la firma mágica PK
+        self.assertTrue(excel_bytes.startswith(b'PK'))
+
+        wb = load_workbook(io.BytesIO(excel_bytes))
+        self.assertEqual(
+            wb.sheetnames,
+            [
+                '1. Resumen y Flujo',
+                '2. Estudios e Insumos',
+                '3. Personal y Boxes',
+                '4. Horas Extras',
+                '5. Auditoría',
+                '6. Detalle de Tickets',
+            ]
+        )
+
+    def test_endpoint_descargar_excel_exitoso(self):
+        """Verifica que el endpoint GET /app/reports/descargar-excel/ retorne un archivo .xlsx válido."""
+        from rest_framework.test import APIClient
+        client = APIClient()
+        client.force_authenticate(user=self.secretaria)
+
+        res = client.get('/app/reports/descargar-excel/')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(
+            res['Content-Type'],
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        self.assertIn('attachment; filename="Reporte_Asistencial_', res['Content-Disposition'])
+        self.assertTrue(res['Content-Disposition'].endswith('.xlsx"'))
+        self.assertTrue(res.content.startswith(b'PK'))
 
     def test_franjas_horarias_y_sla_triage(self):
         """Verifica la segmentación por las 3 franjas horarias y el SLA de tiempos de espera."""
@@ -175,6 +242,7 @@ class ReportsServiceTestCase(TestCase):
         self.assertEqual(audit['total_agregados_box'], 1)
         self.assertEqual(audit['total_cancelados_box'], 1)
         self.assertEqual(len(audit['motivos_cancelacion']), 1)
+        self.assertNotIn('detalle_modificaciones_estudios', audit)
 
     def test_rendimiento_personal_dividido_por_area(self):
         """Verifica la separación de rendimiento entre Admisión y Box de Extracción."""
@@ -259,6 +327,11 @@ class ReportsServiceTestCase(TestCase):
         res_pdf = client.get('/app/reports/descargar-pdf/?fecha=fecha-erronea')
         self.assertEqual(res_pdf.status_code, 400)
         self.assertEqual(res_pdf.data.get('error'), 'FECHA_INVALIDA')
+
+        # 2b. Descargar Excel
+        res_excel = client.get('/app/reports/descargar-excel/?fecha=fecha-erronea')
+        self.assertEqual(res_excel.status_code, 400)
+        self.assertEqual(res_excel.data.get('error'), 'FECHA_INVALIDA')
 
         # 3. Disparar envío
         res_envio = client.post('/app/reports/disparar-envio/', {'fecha': 'fecha-erronea'}, format='json')
