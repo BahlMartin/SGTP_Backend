@@ -73,7 +73,7 @@ class TurnoRecepcionViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['get'], url_path='pendientes', permission_classes=[AllowAny])
     def turnos_pendientes(self, request):
         """
-        Retorna la cola de turnos pendientes o en atención en recepción para el día de hoy.
+        Retorna la cola de turnos en espera activa de recepción para el día de hoy.
         """
         turnos = ReceptionService.obtener_turnos_pendientes_hoy()
         return Response(TurnoRecepcionSerializer(turnos, many=True).data)
@@ -85,6 +85,20 @@ class TurnoRecepcionViewSet(viewsets.ReadOnlyModelViewSet):
         """
         try:
             turno = ReceptionService.llamar_turno(pk)
+            return Response(TurnoRecepcionSerializer(turno).data)
+        except TurnoRecepcion.DoesNotExist:
+            return Response({'error': 'Turno no encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+        except (DjangoValidationError, DRFValidationError) as exc:
+            detail = exc.message_dict if hasattr(exc, 'message_dict') else str(exc)
+            return Response({'error': detail}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'], url_path='finalizar', permission_classes=[AllowAny])
+    def finalizar_paciente(self, request, pk=None):
+        """
+        Pasa el turno a 'Finalizado' cuando concluye su admisión en mostrador.
+        """
+        try:
+            turno = ReceptionService.finalizar_turno(pk)
             return Response(TurnoRecepcionSerializer(turno).data)
         except TurnoRecepcion.DoesNotExist:
             return Response({'error': 'Turno no encontrado.'}, status=status.HTTP_404_NOT_FOUND)
@@ -125,4 +139,3 @@ __all__ = [
     'router',
     'urlpatterns',
 ]
-

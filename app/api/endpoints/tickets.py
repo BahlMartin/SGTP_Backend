@@ -154,7 +154,8 @@ class TicketViewSet(viewsets.ModelViewSet):
 
         # Notificar al WebSocket la creación del ticket (Cola, Boxes, Jefatura y Reportes)
         notificar_eventos_ticket(ticket, 'NEW_TICKET')
-        ReceptionService.finalizar_por_numero(ticket.num_totem)
+        paciente_dni = getattr(ticket.paciente, 'dni', None)
+        ReceptionService.finalizar_por_numero(numero_llamado=ticket.num_totem, dni=paciente_dni)
 
         AuditService.registrar_evento(
             accion=AccionAuditoria.TICKET_CREADO,

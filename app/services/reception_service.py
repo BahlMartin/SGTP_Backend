@@ -3,10 +3,11 @@ Servicio para la emisión, secuenciación atómica y gestión del ciclo de vida
 de los turnos de recepción generados en el Tótem Kiosco.
 """
 import logging
+import re
 from typing import Dict, Any, List, Optional
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
-from django.db import transaction
+from django.db import transaction, models
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 
@@ -106,7 +107,10 @@ class ReceptionService:
 
     @staticmethod
     def obtener_turnos_pendientes_hoy() -> List[TurnoRecepcion]:
-        """Retorna todos los turnos del día en espera o en atención en recepción."""
+        """
+        Retorna únicamente los turnos del día que siguen en espera activa.
+        Los turnos que ya fueron llamados a mostrador o admitidos quedan excluidos.
+        """
         hoy = timezone.localdate()
         inicio_hoy = timezone.make_aware(
             timezone.datetime.combine(hoy, timezone.datetime.min.time()),
@@ -114,7 +118,7 @@ class ReceptionService:
         )
         return TurnoRecepcion.objects.filter(
             created_at__gte=inicio_hoy,
-            estado__in=[EstadoTurnoRecepcion.PENDIENTE, EstadoTurnoRecepcion.EN_ATENCION]
+            estado=EstadoTurnoRecepcion.PENDIENTE
         ).order_by('created_at')
 
     @staticmethod
@@ -167,25 +171,69 @@ class ReceptionService:
 
     @staticmethod
     @transaction.atomic
-    def finalizar_por_numero(numero_llamado: str) -> Optional[TurnoRecepcion]:
-        """Marca el turno como finalizado cuando se emite el ticket asistencial en admisión."""
-        if not numero_llamado:
-            return None
+    def finalizar_turno(turno_id: str) -> TurnoRecepcion:
+        """Marca un turno de recepción como finalizado por su UUID."""
+        turno = TurnoRecepcion.objects.select_for_update().get(id=turno_id)
+        turno.estado = EstadoTurnoRecepcion.FINALIZADO
+        turno.save(update_fields=['estado', 'updated_at'])
 
+        notificar_websocket_recepcion(
+            'RECEPTION_UPDATED',
+            'TURNO_FINALIZED',
+            {
+                'id': str(turno.id),
+                'numero_llamado': turno.numero_llamado,
+                'dni': turno.dni,
+                'estado': turno.estado
+            }
+        )
+        return turno
+
+    @staticmethod
+    @transaction.atomic
+    def finalizar_por_numero(numero_llamado: Optional[str] = None, dni: Optional[Any] = None) -> List[TurnoRecepcion]:
+        """
+        Marca el turno como finalizado cuando se emite el ticket asistencial en admisión.
+        Busca de forma tolerante por número de llamado (insensible a mayúsculas/minúsculas)
+        o por el DNI del paciente admitido.
+        """
         hoy = timezone.localdate()
         inicio_hoy = timezone.make_aware(
             timezone.datetime.combine(hoy, timezone.datetime.min.time()),
             timezone.get_current_timezone()
         )
-        turno = TurnoRecepcion.objects.filter(
-            created_at__gte=inicio_hoy,
-            numero_llamado=numero_llamado.strip(),
-            estado__in=[EstadoTurnoRecepcion.PENDIENTE, EstadoTurnoRecepcion.EN_ATENCION]
-        ).first()
 
-        if turno:
+        condiciones = models.Q()
+        if numero_llamado and str(numero_llamado).strip():
+            clean_num = str(numero_llamado).strip()
+            condiciones |= models.Q(numero_llamado__iexact=clean_num)
+
+            # Extraer prefijo y número (ej. EXT-01 o Ext-1)
+            match = re.match(r'^([a-zA-Z]+)[-\s]?(\d+)$', clean_num)
+            if match:
+                pref, num = match.groups()
+                condiciones |= models.Q(prefijo__iexact=pref, numero_secuencia=int(num))
+
+        if dni:
+            clean_dni = "".join(filter(str.isdigit, str(dni)))
+            if clean_dni:
+                condiciones |= models.Q(dni=clean_dni)
+
+        if not condiciones:
+            return []
+
+        turnos = TurnoRecepcion.objects.select_for_update().filter(
+            models.Q(created_at__gte=inicio_hoy) &
+            models.Q(estado__in=[EstadoTurnoRecepcion.PENDIENTE, EstadoTurnoRecepcion.EN_ATENCION]) &
+            condiciones
+        )
+
+        finalizados = []
+        for turno in turnos:
             turno.estado = EstadoTurnoRecepcion.FINALIZADO
             turno.save(update_fields=['estado', 'updated_at'])
+            finalizados.append(turno)
+
             notificar_websocket_recepcion(
                 'RECEPTION_UPDATED',
                 'TURNO_FINALIZED',
@@ -196,5 +244,5 @@ class ReceptionService:
                     'estado': turno.estado
                 }
             )
-        return turno
 
+        return finalizados
