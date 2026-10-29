@@ -53,8 +53,8 @@ class PersonalViewSet(viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer: PersonalSerializer) -> None:
-        AuthenticationService.crear_personal(
-            datos=serializer.validated_data,
+        serializer.instance = AuthenticationService.crear_personal(
+            datos=dict(serializer.validated_data),
             creador=self.request.user
         )
 

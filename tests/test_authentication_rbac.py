@@ -320,3 +320,25 @@ class AuthenticationRBACTestCase(TestCase):
                 solicitante=self.jefa_user
             )
 
+
+    def test_endpoint_crear_personal_retorna_201_y_serializa_instancia(self):
+        """Verifica que POST /app/users/ asigne serializer.instance y retorne 201 sin AttributeError."""
+        from rest_framework.test import APIClient
+        client = APIClient()
+        client.force_authenticate(user=self.jefa_user)
+
+        payload = {
+            'email': 'nuevo_api_box@hospital.local',
+            'password': 'Password123!',
+            'nombre': 'Camila',
+            'apellidos': 'Romero',
+            'dni': 39888777,
+            'rol': RolPersonal.BOX,
+            'inicio_turno': '08:00:00',
+            'fin_turno': '16:00:00',
+            'dias_laborales': [0, 1, 2, 3, 4],
+        }
+        res = client.post('/app/users/', payload, format='json')
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data['email'], 'nuevo_api_box@hospital.local')
+        self.assertEqual(res.data['dias_laborales_detalle'], [0, 1, 2, 3, 4])
