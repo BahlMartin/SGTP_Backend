@@ -30,6 +30,8 @@ from app.schemas.box import (
 from app.schemas.ticket import TicketDetailSerializer, TicketHistorialDetailSerializer
 from app.models.ticket import Ticket
 from app.services.triage_service import TriageService
+from app.services.audit_service import AuditService
+from app.models.audit import AccionAuditoria, ResultadoAuditoria
 from app.core.permissions import IsBoxOrJefa
 from app.services.ticket_service import TicketService
 
@@ -152,6 +154,18 @@ class BoxViewSet(viewsets.ModelViewSet):
 
         # Notificar al WebSocket que un técnico se posicionó en el box
         notificar_monitor_operativo_box(box)
+
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.BOX_TOMADO,
+            usuario=personal,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion=f'Toma de posesión de Box {box.numero}',
+            entidad_tipo='Box',
+            entidad_id=box.numero,
+            metadata={'box': f'Box {box.numero}'},
+            request=request
+        )
+
         return Response(BoxSerializer(box).data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'], url_path='llamar-siguiente', permission_classes=[IsBoxOrJefa])
@@ -238,6 +252,22 @@ class BoxViewSet(viewsets.ModelViewSet):
         except DjangoValidationError as e:
             detail_msg = e.messages[0] if hasattr(e, 'messages') and e.messages else str(e)
             return Response({"detail": detail_msg}, status=status.HTTP_400_BAD_REQUEST)
+
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.ESTUDIOS_MODIFICADOS,
+            usuario=request.user,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion=f'Modificación de estudios en Box {box.numero} para Ticket {ticket.num_totem}',
+            entidad_tipo='Ticket',
+            entidad_id=ticket.pk,
+            metadata={
+                'ticket': ticket.num_totem,
+                'box': f'Box {box.numero}',
+                'estudios_cancelados': len(serializer.validated_data.get('cancelar_estudios', [])),
+                'estudios_agregados': len(serializer.validated_data.get('agregar_estudios', []))
+            },
+            request=request
+        )
 
         return Response(
             {

@@ -10,9 +10,12 @@ from rest_framework.routers import DefaultRouter
 from rest_framework.permissions import IsAuthenticated
 
 from app.models.patient import Paciente
+from app.models.audit import AccionAuditoria, ResultadoAuditoria
 from app.schemas.patient import PacienteSerializer
 from app.schemas.ticket import TicketHistorialDetailSerializer
 from app.core.permissions import IsAdmisionOrJefa, IsSecretariaOrJefa
+from app.services.audit_service import AuditService
+
 
 class PacienteViewSet(viewsets.ModelViewSet):
     """
@@ -22,6 +25,36 @@ class PacienteViewSet(viewsets.ModelViewSet):
     queryset = Paciente.objects.all().order_by('dni')
     serializer_class = PacienteSerializer
     permission_classes = [IsAuthenticated, IsAdmisionOrJefa]
+
+    def perform_create(self, serializer):
+        paciente = serializer.save()
+        dni_str = str(paciente.dni) if paciente.dni else ''
+        enmascarado = f"{dni_str[:2]}.***.{dni_str[-3:]}" if len(dni_str) >= 5 else "***"
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.PACIENTE_CREADO,
+            usuario=self.request.user,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion=f'Alta de paciente: {paciente.nombre} {paciente.apellido}',
+            entidad_tipo='Paciente',
+            entidad_id=paciente.pk,
+            metadata={'dni_enmascarado': enmascarado},
+            request=self.request
+        )
+
+    def perform_update(self, serializer):
+        paciente = serializer.save()
+        dni_str = str(paciente.dni) if paciente.dni else ''
+        enmascarado = f"{dni_str[:2]}.***.{dni_str[-3:]}" if len(dni_str) >= 5 else "***"
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.PACIENTE_EDITADO,
+            usuario=self.request.user,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion=f'Actualización de datos de paciente: {paciente.nombre} {paciente.apellido}',
+            entidad_tipo='Paciente',
+            entidad_id=paciente.pk,
+            metadata={'dni_enmascarado': enmascarado},
+            request=self.request
+        )
 
     def perform_destroy(self, instance: Paciente) -> None:
         """Aplica borrado lógico en lugar de borrado físico destructivo."""
@@ -34,7 +67,6 @@ class PacienteViewSet(viewsets.ModelViewSet):
         permission_classes=[IsAuthenticated, IsAdmisionOrJefa | IsSecretariaOrJefa]
     )
     def buscar_por_dni(self, request: Request) -> Response:
-
         """Endpoint asistencial directo para verificación de antecedentes en Admisión vía POST."""
         dni = request.data.get('dni')
         if not dni:
@@ -42,7 +74,6 @@ class PacienteViewSet(viewsets.ModelViewSet):
                 {"detail": "El campo 'dni' es requerido en el cuerpo de la solicitud."},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
 
         try:
             paciente = Paciente.objects.get(dni=int(dni))
@@ -77,6 +108,18 @@ class PacienteViewSet(viewsets.ModelViewSet):
             )
             .order_by('-fecha_hora_admision')
         )
+
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.HISTORIAL_PACIENTE_CONSULTADO,
+            usuario=request.user,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion=f'Consulta de historial asistencial de {paciente.nombre} {paciente.apellido}',
+            entidad_tipo='Paciente',
+            entidad_id=paciente.pk,
+            metadata={'total_atenciones': tickets.count()},
+            request=request
+        )
+
         return Response({
             'paciente': PacienteSerializer(paciente).data,
             'atenciones': TicketHistorialDetailSerializer(tickets, many=True).data
@@ -92,8 +135,4 @@ urlpatterns = [
     path('', include(router.urls)),
 ]
 
-__all__ = [
-    'PacienteViewSet',
-    'router',
-    'urlpatterns',
-]
+__all__ = ['PacienteViewSet', 'urlpatterns']

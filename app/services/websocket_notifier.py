@@ -94,3 +94,90 @@ def notificar_cambio_estado_personal(personal=None, accion: str = 'UPDATED'):
     }
     emitir_evento_ws('sgtp_monitor_operativo', 'STAFF_UPDATED', payload)
     emitir_evento_ws('sgtp_reports_live', 'STAFF_UPDATED', payload)
+
+
+
+def notificar_evento_auditoria(evento):
+    """
+    Notifica la creación de un nuevo evento de auditoría operacional en tiempo real.
+    Aplica la regla RBAC estricta en el despacho:
+    - Siempre al grupo 'sgtp_auditoria_admin'.
+    - Si el operador NO es Admin, TAMBIÉN al grupo 'sgtp_auditoria_jefa'.
+    """
+    from app.models.user import RolPersonal
+
+    nombre_emp = (
+        f"{evento.usuario.nombre} {evento.usuario.apellidos or ''}".strip()
+        if evento.usuario else (evento.email_intentado or 'Sistema / Sin sesión')
+    )
+    payload = {
+        'id': evento.id,
+        'fecha': evento.fecha.isoformat(),
+        'hora': evento.fecha.strftime('%H:%M:%S'),
+        'usuario': {
+            'id': evento.usuario.id_personal if evento.usuario else None,
+            'nombre': evento.usuario.nombre if evento.usuario else nombre_emp,
+            'apellidos': evento.usuario.apellidos if evento.usuario else '',
+            'email': evento.usuario.email if evento.usuario else (evento.email_intentado or ''),
+            'rol': evento.rol_usuario or 'Sin sesión',
+            'matricula': evento.usuario.matricula if evento.usuario else ''
+        } if evento.usuario else {
+            'id': None,
+            'nombre': nombre_emp,
+            'apellidos': '',
+            'email': evento.email_intentado or '',
+            'rol': evento.rol_usuario or 'Sin sesión',
+            'matricula': ''
+        },
+        'rol_usuario': evento.rol_usuario,
+        'categoria': evento.categoria,
+        'accion': evento.accion,
+        'resultado': evento.resultado,
+        'descripcion': evento.descripcion,
+        'ip': evento.ip,
+        'ip_confiable': evento.ip_confiable,
+        'geo_ip_ciudad': evento.geo_ip_ciudad,
+        'geo_ip_pais': evento.geo_ip_pais,
+        'geo_ip_estado': evento.geo_ip_estado,
+        'geo_nav_lat': float(evento.geo_nav_lat) if evento.geo_nav_lat is not None else None,
+        'geo_nav_lon': float(evento.geo_nav_lon) if evento.geo_nav_lon is not None else None,
+        'geo_nav_precision_m': float(evento.geo_nav_precision_m) if evento.geo_nav_precision_m is not None else None,
+        'alertas': evento.alertas or [],
+        'metadata': evento.metadata or {}
+    }
+
+    # Transmitir a Admin siempre
+    emitir_evento_ws('sgtp_auditoria_admin', 'AUDIT_EVENT_CREATED', payload)
+
+    # Transmitir a Jefa sólo si no fue ejecutado por un Admin
+    es_admin = (evento.rol_usuario == RolPersonal.ADMIN) or (
+        evento.usuario and evento.usuario.rol == RolPersonal.ADMIN
+    )
+    if not es_admin:
+        emitir_evento_ws('sgtp_auditoria_jefa', 'AUDIT_EVENT_CREATED', payload)
+
+
+def notificar_actualizacion_geo_auditoria(evento):
+    """
+    Notifica cuando se asocian las coordenadas GPS del navegador a un evento existente.
+    """
+    from app.models.user import RolPersonal
+
+    payload = {
+        'id': evento.id,
+        'geo_nav_lat': float(evento.geo_nav_lat) if evento.geo_nav_lat is not None else None,
+        'geo_nav_lon': float(evento.geo_nav_lon) if evento.geo_nav_lon is not None else None,
+        'geo_nav_precision_m': float(evento.geo_nav_precision_m) if evento.geo_nav_precision_m is not None else None,
+        'geo_nav_distancia_km': float(evento.geo_nav_distancia_km) if evento.geo_nav_distancia_km is not None else None,
+        'geo_nav_coincide_ip': evento.geo_nav_coincide_ip,
+        'geo_nav_estado': evento.geo_nav_estado,
+        'alertas': evento.alertas or []
+    }
+
+    emitir_evento_ws('sgtp_auditoria_admin', 'AUDIT_EVENT_GEO_UPDATED', payload)
+
+    es_admin = (evento.rol_usuario == RolPersonal.ADMIN) or (
+        evento.usuario and evento.usuario.rol == RolPersonal.ADMIN
+    )
+    if not es_admin:
+        emitir_evento_ws('sgtp_auditoria_jefa', 'AUDIT_EVENT_GEO_UPDATED', payload)

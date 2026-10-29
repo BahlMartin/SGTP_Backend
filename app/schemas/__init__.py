@@ -57,3 +57,15 @@ __all__ = [
     'OCRScanResponseSerializer',
 ]
 
+
+from app.schemas.audit import (
+    EventoAuditoriaListSerializer,
+    EventoAuditoriaDetailSerializer,
+    ReportarUbicacionSerializer
+)
+
+__all__ += [
+    'EventoAuditoriaListSerializer',
+    'EventoAuditoriaDetailSerializer',
+    'ReportarUbicacionSerializer',
+]

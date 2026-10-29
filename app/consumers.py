@@ -211,3 +211,84 @@ class MonitorOperativoConsumer(BaseHospitalConsumer):
         if self.is_authenticated and self.group_name:
             await self.channel_layer.group_discard(self.group_name, self.channel_name)
         logger.info(f"[WebSocket] Desconectado: {self.__class__.__name__} código={close_code}")
+
+
+
+class AuditoriaEventsConsumer(BaseHospitalConsumer):
+    """
+    Transmite en tiempo real eventos de auditoría y actividad operacional.
+    Exclusivo para roles Admin y Jefa.
+    Aplica regla RBAC estricta en tiempo real:
+    - Admin se une al grupo 'sgtp_auditoria_admin' (recibe todos los eventos).
+    - Jefa se une al grupo 'sgtp_auditoria_jefa' (nunca recibe eventos de Admin).
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.group_name = None
+        self.auth_timeout_task = None
+        self.is_authenticated = False
+
+    @database_sync_to_async
+    def _is_authorized(self, user):
+        return bool(user and user.is_authenticated and user.rol in [RolPersonal.ADMIN, RolPersonal.JEFA])
+
+    async def connect(self):
+        await self.accept()
+        logger.info(f"[WebSocket] Auditoria: Conexión abierta, esperando AUTH ({self.channel_name})")
+
+        user = self.scope.get('user')
+        if await self._is_authorized(user):
+            await self._setup_group(user)
+            await self.send(text_data=json.dumps({
+                'type': 'AUTH_SUCCESS',
+                'email': getattr(user, 'email', ''),
+                'rol': getattr(user, 'rol', '')
+            }))
+            return
+
+        self.auth_timeout_task = asyncio.create_task(self._wait_for_auth())
+
+    async def _wait_for_auth(self):
+        try:
+            await asyncio.sleep(5)
+            if not self.is_authenticated:
+                logger.warning(f"[WebSocket] Auditoria: Timeout de autenticación agotado ({self.channel_name})")
+                await self.send(text_data=json.dumps({
+                    'type': 'AUTH_ERROR',
+                    'detail': 'Tiempo de espera de autenticación agotado'
+                }))
+                await self.close(code=4003)
+        except asyncio.CancelledError:
+            pass
+
+    async def on_authenticated(self, user):
+        if self.auth_timeout_task and not self.auth_timeout_task.done():
+            self.auth_timeout_task.cancel()
+
+        if await self._is_authorized(user):
+            await self._setup_group(user)
+            logger.info(f"[WebSocket] Auditoria: Usuario {user.email} (rol: {user.rol}) autorizado en grupo {self.group_name}.")
+        else:
+            logger.warning(f"[WebSocket] Auditoria: Usuario {user.email} denegado (rol: {user.rol}).")
+            await self.send(text_data=json.dumps({
+                'type': 'AUTH_ERROR',
+                'detail': 'Acceso denegado. Se requiere rol Jefa o Admin.'
+            }))
+            await self.close(code=4003)
+
+    async def _setup_group(self, user):
+        self.is_authenticated = True
+        self.group_name = 'sgtp_auditoria_admin' if user.rol == RolPersonal.ADMIN else 'sgtp_auditoria_jefa'
+        await self.channel_layer.group_add(self.group_name, self.channel_name)
+
+    async def on_auth_failed(self):
+        if self.auth_timeout_task and not self.auth_timeout_task.done():
+            self.auth_timeout_task.cancel()
+        await self.close(code=4003)
+
+    async def disconnect(self, close_code):
+        if self.auth_timeout_task and not self.auth_timeout_task.done():
+            self.auth_timeout_task.cancel()
+        if self.is_authenticated and self.group_name:
+            await self.channel_layer.group_discard(self.group_name, self.channel_name)
+        logger.info(f"[WebSocket] Desconectado: AuditoriaEventsConsumer código={close_code}")

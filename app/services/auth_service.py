@@ -6,7 +6,9 @@ from typing import Optional, Dict, Any, Tuple
 from django.conf import settings
 from django.core.exceptions import ValidationError, PermissionDenied
 from app.models.user import Personal, RolPersonal, HabilitacionHoraria
+from app.models.audit import AccionAuditoria, ResultadoAuditoria
 from app.services.websocket_notifier import notificar_cambio_estado_personal
+from app.services.audit_service import AuditService
 
 
 class AuthenticationService:
@@ -25,13 +27,28 @@ class AuthenticationService:
         Autentica un usuario verificando contraseña (argon2/pbkdf2) e intentos.
         Retorna (Personal, None) si es exitoso o (None, mensaje_error).
         """
+        email_limpio = (email or '').strip()
         try:
-            user = Personal.objects.get(email__iexact=email.strip())
+            user = Personal.objects.get(email__iexact=email_limpio)
         except Personal.DoesNotExist:
+            AuditService.registrar_evento(
+                accion=AccionAuditoria.LOGIN_FALLIDO,
+                email_intentado=email_limpio,
+                resultado=ResultadoAuditoria.FALLO,
+                descripcion='Intento de inicio de sesión con usuario inexistente',
+                metadata={'motivo': 'Usuario no encontrado'}
+            )
             return None, "Credenciales inválidas o usuario inexistente."
 
         # Si el usuario ya se encuentra bloqueado
         if not user.activo:
+            AuditService.registrar_evento(
+                accion=AccionAuditoria.LOGIN_FALLIDO,
+                usuario=user,
+                resultado=ResultadoAuditoria.DENEGADO,
+                descripcion='Intento de acceso con cuenta deshabilitada o bloqueada',
+                metadata={'motivo': 'Cuenta bloqueada o inactiva'}
+            )
             return None, (
                 "Cuenta deshabilitada o bloqueada por alcanzar el límite de intentos fallidos. "
                 "Contacte a la Jefa de Laboratorio y/o Secretaría para su desbloqueo."
@@ -45,11 +62,25 @@ class AuthenticationService:
                 accion='BLOQUEO_AUTOMATICO' if bloqueado else 'INTENTO_FALLIDO'
             )
             if bloqueado:
+                AuditService.registrar_evento(
+                    accion=AccionAuditoria.CUENTA_BLOQUEADA_AUTO,
+                    usuario=user,
+                    resultado=ResultadoAuditoria.FALLO,
+                    descripcion='Cuenta bloqueada por alcanzar 3 intentos fallidos consecutivos',
+                    metadata={'intento': 3, 'motivo': '3 fallos consecutivos'}
+                )
                 return None, (
                     "Ha alcanzado 3 intentos fallidos consecutivos de inicio de sesión. "
                     "Por políticas de seguridad, su cuenta ha sido bloqueada automáticamente."
                 )
             intentos_restantes = max(0, 3 - user.cant_intentos)
+            AuditService.registrar_evento(
+                accion=AccionAuditoria.LOGIN_FALLIDO,
+                usuario=user,
+                resultado=ResultadoAuditoria.FALLO,
+                descripcion=f'Contraseña incorrecta (intento {user.cant_intentos} de 3)',
+                metadata={'intento': user.cant_intentos, 'restantes': intentos_restantes}
+            )
             return None, f"Contraseña incorrecta. Le restan {intentos_restantes} intento(s) antes del bloqueo de la cuenta."
 
         # Login exitoso: restablecer contador de intentos fallidos
@@ -57,6 +88,14 @@ class AuthenticationService:
         user.resetear_intentos()
         if tenia_intentos_previos:
             notificar_cambio_estado_personal(user, accion='INTENTOS_RESETEADOS')
+
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.LOGIN_EXITOSO,
+            usuario=user,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion='Inicio de sesión exitoso',
+            metadata={'metodo': 'Contraseña institucional'}
+        )
         return user, None
 
     @classmethod
@@ -69,6 +108,13 @@ class AuthenticationService:
         Desbloqueo manual permitido exclusivamente para roles: Jefa, Admin o Secretaria.
         """
         if solicitante.rol not in [RolPersonal.ADMIN, RolPersonal.JEFA, RolPersonal.SECRETARIA]:
+            AuditService.registrar_evento(
+                accion=AccionAuditoria.USUARIO_DESBLOQUEADO,
+                usuario=solicitante,
+                resultado=ResultadoAuditoria.DENEGADO,
+                descripcion='Intento no autorizado de desbloquear cuenta',
+                metadata={'id_personal_objetivo': id_personal}
+            )
             raise PermissionDenied("No tiene permisos para desbloquear cuentas de personal.")
 
         try:
@@ -78,6 +124,20 @@ class AuthenticationService:
 
         personal.desbloquear()
         notificar_cambio_estado_personal(personal, accion='DESBLOQUEADO')
+
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.USUARIO_DESBLOQUEADO,
+            usuario=solicitante,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion=f'Desbloqueo manual de cuenta: {personal.email}',
+            entidad_tipo='Personal',
+            entidad_id=personal.pk,
+            cambios=[
+                {'campo': 'Estado de cuenta', 'antes': 'Bloqueada', 'despues': 'Activa'},
+                {'campo': 'Intentos fallidos', 'antes': str(personal.cant_intentos), 'despues': '0'}
+            ],
+            metadata={'usuario_desbloqueado': personal.email, 'rol': personal.rol}
+        )
         return personal
 
     @classmethod
@@ -106,6 +166,19 @@ class AuthenticationService:
 
         personal.bloquear()
         notificar_cambio_estado_personal(personal, accion='BLOQUEADO')
+
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.USUARIO_BLOQUEADO,
+            usuario=solicitante,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion=f'Bloqueo administrativo manual: {personal.email}',
+            entidad_tipo='Personal',
+            entidad_id=personal.pk,
+            cambios=[
+                {'campo': 'Estado de cuenta', 'antes': 'Activa', 'despues': 'Bloqueada'}
+            ],
+            metadata={'usuario_bloqueado': personal.email, 'rol': personal.rol}
+        )
         return personal
 
     @classmethod
@@ -125,6 +198,13 @@ class AuthenticationService:
 
         # Comparación en tiempo constante para mitigar ataques de temporización (timing attacks)
         if not secrets.compare_digest(token_emergencia.strip(), secreto_configurado.strip()):
+            AuditService.registrar_evento(
+                accion=AccionAuditoria.DESBLOQUEO_EMERGENCIA,
+                email_intentado=email,
+                resultado=ResultadoAuditoria.FALLO,
+                descripcion='Intento de autodesbloqueo de emergencia con token inválido',
+                metadata={'email': email}
+            )
             raise PermissionDenied("Token criptográfico de emergencia inválido.")
 
         try:
@@ -134,12 +214,32 @@ class AuthenticationService:
 
         # Exclusivo para 'Admin' o 'Jefa'
         if personal.rol not in [RolPersonal.ADMIN, RolPersonal.JEFA]:
+            AuditService.registrar_evento(
+                accion=AccionAuditoria.DESBLOQUEO_EMERGENCIA,
+                usuario=personal,
+                resultado=ResultadoAuditoria.DENEGADO,
+                descripcion=f'Intento de autodesbloqueo con rol no autorizado ({personal.rol})',
+                metadata={'rol': personal.rol}
+            )
             raise PermissionDenied(
                 "El desbloqueo de emergencia está restringido exclusivamente a los roles 'Admin' y 'Jefa'."
             )
 
         personal.desbloquear()
         notificar_cambio_estado_personal(personal, accion='DESBLOQUEO_EMERGENCIA')
+
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.DESBLOQUEO_EMERGENCIA,
+            usuario=personal,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion=f'Desbloqueo de emergencia ejecutado con éxito para {personal.email}',
+            entidad_tipo='Personal',
+            entidad_id=personal.pk,
+            cambios=[
+                {'campo': 'Estado de cuenta', 'antes': 'Bloqueada', 'despues': 'Activa'}
+            ],
+            metadata={'rol': personal.rol}
+        )
         return personal
 
     @classmethod
@@ -183,6 +283,21 @@ class AuthenticationService:
                 DiaLaboralPersonal.objects.create(personal=user, dia_semana=d)
 
         notificar_cambio_estado_personal(user, accion='CREADO')
+
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.USUARIO_CREADO,
+            usuario=creador,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion=f'Creación de personal asistencial: {user.nombre} {user.apellidos} ({user.rol})',
+            entidad_tipo='Personal',
+            entidad_id=user.pk,
+            metadata={
+                'nuevo_usuario': user.email,
+                'rol': user.rol,
+                'dni': user.dni,
+                'matricula': user.matricula or ''
+            }
+        )
         return user
 
 

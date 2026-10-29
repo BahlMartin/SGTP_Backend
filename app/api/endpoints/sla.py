@@ -9,8 +9,10 @@ from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
 from app.models.ticket import ConfiguracionSlaTriage
+from app.models.audit import AccionAuditoria, ResultadoAuditoria
 from app.schemas.ticket import ConfiguracionSlaTriageSerializer
 from app.core.permissions import IsJefaRole
+from app.services.audit_service import AuditService
 
 
 class ConfiguracionSlaTriageViewSet(viewsets.ModelViewSet):
@@ -32,6 +34,19 @@ class ConfiguracionSlaTriageViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         sla_obj = serializer.save()
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.SLA_MODIFICADO,
+            usuario=self.request.user,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion=f'Calibración de SLA Triage: {sla_obj.clasificacion_triage} a {sla_obj.tiempo_objetivo_minutos} min',
+            entidad_tipo='ConfiguracionSlaTriage',
+            entidad_id=sla_obj.pk,
+            metadata={
+                'triage': sla_obj.clasificacion_triage,
+                'minutos_objetivo': sla_obj.tiempo_objetivo_minutos
+            },
+            request=self.request
+        )
         channel_layer = get_channel_layer()
         if channel_layer:
             payload = {
@@ -54,5 +69,4 @@ urlpatterns = [
     path('', include(router.urls)),
 ]
 
-__all__ = ['urlpatterns']
-
+__all__ = ['ConfiguracionSlaTriageViewSet', 'urlpatterns']

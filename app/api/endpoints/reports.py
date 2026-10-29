@@ -14,6 +14,8 @@ from drf_spectacular.utils import extend_schema, OpenApiParameter
 from app.models.report import HistorialReporteDiario
 from app.schemas.report import HistorialReporteDiarioSerializer, DispararReporteRequestSerializer
 from app.services.reports.report_facade import ReportFacade
+from app.services.audit_service import AuditService
+from app.models.audit import AccionAuditoria, ResultadoAuditoria
 from app.core.permissions import IsSecretariaOrJefa, IsJefaRole
 from app.core.validators import validar_rango_fechas, validar_formato_email
 
@@ -84,6 +86,15 @@ class DescargarReportePdfView(APIView):
         pdf_bytes = ReportFacade.generar_pdf_reporte(metricas)
         nombre_periodo = str(metricas['fecha']).replace(' al ', '_a_')
 
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.REPORTE_EXPORTADO,
+            usuario=request.user,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion=f'Exportación de reporte asistencial PDF ({nombre_periodo})',
+            metadata={'formato': 'PDF', 'periodo': nombre_periodo},
+            request=request
+        )
+
         response = HttpResponse(pdf_bytes, content_type='application/pdf')
         response['Content-Disposition'] = f'attachment; filename="Reporte_Asistencial_{nombre_periodo}.pdf"'
         return response
@@ -113,6 +124,15 @@ class DescargarReporteExcelView(APIView):
         )
         excel_bytes = ReportFacade.generar_excel_reporte(metricas)
         nombre_periodo = str(metricas['fecha']).replace(' al ', '_a_')
+
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.REPORTE_EXPORTADO,
+            usuario=request.user,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion=f'Exportación de reporte asistencial Excel ({nombre_periodo})',
+            metadata={'formato': 'Excel', 'periodo': nombre_periodo},
+            request=request
+        )
 
         response = HttpResponse(excel_bytes, content_type=XLSX_CONTENT_TYPE)
         response['Content-Disposition'] = f'attachment; filename="Reporte_Asistencial_{nombre_periodo}.xlsx"'

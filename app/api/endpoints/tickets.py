@@ -26,6 +26,8 @@ from app.schemas.ticket import (
     TicketHistorialDetailSerializer,
 )
 from app.services.ticket_service import TicketService
+from app.services.audit_service import AuditService
+from app.models.audit import AccionAuditoria, ResultadoAuditoria
 from app.services.triage_service import construir_orden_prioridad_case
 
 from asgiref.sync import async_to_sync
@@ -152,6 +154,21 @@ class TicketViewSet(viewsets.ModelViewSet):
         # Notificar al WebSocket la creación del ticket (Cola, Boxes, Jefatura y Reportes)
         notificar_eventos_ticket(ticket, 'NEW_TICKET')
 
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.TICKET_CREADO,
+            usuario=request.user,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion=f'Emisión de Ticket {ticket.num_totem} ({ticket.clasificacion_triage})',
+            entidad_tipo='Ticket',
+            entidad_id=ticket.pk,
+            metadata={
+                'ticket': ticket.num_totem,
+                'triage': ticket.clasificacion_triage,
+                'paciente_id': ticket.paciente_id,
+            },
+            request=request
+        )
+
         headers = self.get_success_headers(serializer.data)
         return Response(TicketDetailSerializer(ticket).data, status=status.HTTP_201_CREATED, headers=headers)
 
@@ -165,6 +182,20 @@ class TicketViewSet(viewsets.ModelViewSet):
             ticket_id=instance.pk,
             usuario=request.user,
             datos=request.data
+        )
+
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.TICKET_EDITADO,
+            usuario=request.user,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion=f'Modificación de Ticket {ticket_modificado.num_totem}',
+            entidad_tipo='Ticket',
+            entidad_id=ticket_modificado.pk,
+            metadata={
+                'ticket': ticket_modificado.num_totem,
+                'estado': ticket_modificado.estado,
+            },
+            request=request
         )
 
         return Response(TicketDetailSerializer(ticket_modificado).data, status=status.HTTP_200_OK)

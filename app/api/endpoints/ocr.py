@@ -17,7 +17,9 @@ from app.schemas.ocr import (
 )
 from app.services.ocr_service import OCRIntegrationService
 from app.models.studies import PerfilEstudioPatron, Estudios
+from app.models.audit import AccionAuditoria, ResultadoAuditoria
 from app.core.permissions import IsAdmisionOrJefa
+from app.services.audit_service import AuditService
 
 
 class EscanearRecetaOCRView(APIView):
@@ -49,6 +51,19 @@ class EscanearRecetaOCRView(APIView):
             combo = resultado.get('combo_detectado')
             msg_combo = f" [Batería detectada: {combo}]" if combo else ""
 
+            AuditService.registrar_evento(
+                accion=AccionAuditoria.RECETA_ESCANEADA,
+                usuario=request.user,
+                resultado=ResultadoAuditoria.EXITO,
+                descripcion='Escaneo y análisis OCR de orden médica',
+                metadata={
+                    'estudios_detectados': resultado['total_sugerencias'],
+                    'combo': combo or 'Ninguno',
+                    'modo': 'frontend_client'
+                },
+                request=request
+            )
+
             return Response(
                 {
                     "mensaje": f"Mapeo léxico completado. Se detectaron {resultado['total_sugerencias']} estudios sugeridos.{msg_combo}",
@@ -78,6 +93,19 @@ class EscanearRecetaOCRView(APIView):
         sugerencias = OCRIntegrationService.procesar_orden_medica_en_memoria(
             archivo_imagen=archivo,
             nombre_archivo=archivo.name
+        )
+
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.RECETA_ESCANEADA,
+            usuario=request.user,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion='Escaneo y análisis OCR de orden médica',
+            metadata={
+                'estudios_detectados': len(sugerencias),
+                'modo': 'backend_file',
+                'archivo': archivo.name
+            },
+            request=request
         )
 
         return Response(
@@ -118,6 +146,18 @@ class RetroalimentarOCRView(APIView):
             lineas_origen=data.get('lineas_origen', []),
             estudios_confirmados_ids=data.get('estudios_confirmados_ids', []),
             asociaciones_directas=data.get('asociaciones_directas', [])
+        )
+
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.OCR_CORREGIDO,
+            usuario=request.user,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion='Corrección y retroalimentación activa de OCR',
+            metadata={
+                'estudios_confirmados': len(data.get('estudios_confirmados_ids', [])),
+                'asociaciones_aprendidas': len(data.get('asociaciones_directas', []))
+            },
+            request=request
         )
 
         return Response(resultado, status=status.HTTP_200_OK)

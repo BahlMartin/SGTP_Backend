@@ -12,6 +12,7 @@ from django.utils import timezone
 
 from app.core.jwe import decrypt_payload_jwe
 from app.models.user import RolPersonal, HabilitacionHoraria
+from app.models.audit import AccionAuditoria, ResultadoAuditoria
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,21 @@ class ShiftScheduleRestrictionMiddleware:
                 ).exists()
 
                 if not tiene_habilitacion:
+                    from app.services.audit_service import AuditService
+                    AuditService.registrar_evento(
+                        accion=AccionAuditoria.ACCESO_FUERA_DE_TURNO,
+                        usuario=user,
+                        resultado=ResultadoAuditoria.DENEGADO,
+                        descripcion=f'Acceso bloqueado fuera de turno habitual ({now_time.strftime("%H:%M")})',
+                        metadata={
+                            'ruta': request.path,
+                            'metodo': request.method,
+                            'inicio_turno': str(user.inicio_turno) if user.inicio_turno else None,
+                            'fin_turno': str(user.fin_turno) if user.fin_turno else None,
+                            'dia_laboral': es_dia_laboral,
+                        },
+                        request=request
+                    )
                     return JsonResponse(
                         {
                             "error": "ACCESO_FUERA_DE_TURNO",

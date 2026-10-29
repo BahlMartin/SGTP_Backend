@@ -18,6 +18,8 @@ from app.schemas.user import (
     EmergencyUnlockSerializer,
 )
 from app.services.auth_service import AuthenticationService
+from app.services.audit_service import AuditService
+from app.models.audit import AccionAuditoria, ResultadoAuditoria
 
 
 class LoginView(APIView):
@@ -77,11 +79,18 @@ class LogoutView(APIView):
     @extend_schema(request=None, responses={200: dict})
     def post(self, request: Request) -> Response:
         from app.services.triage_service import TriageService
-        TriageService.liberar_boxes_de_personal(request.user)
+        user = request.user
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.LOGOUT,
+            usuario=user,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion='Cierre voluntario de sesión',
+            metadata={'rol': getattr(user, 'rol', '')},
+            request=request
+        )
+        TriageService.liberar_boxes_de_personal(user)
         logout(request)
         return Response({"mensaje": "Sesión finalizada correctamente."}, status=status.HTTP_200_OK)
-
-
 
 
 class DesbloqueoManualView(APIView):
@@ -184,4 +193,3 @@ __all__ = [
     'EmergencyUnlockView',
     'urlpatterns',
 ]
-

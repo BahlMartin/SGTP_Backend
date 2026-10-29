@@ -30,6 +30,12 @@ from app.models.ticket import (
     ClasificacionTriage,
 )
 from app.models.report import HistorialReporteDiario
+from app.models.audit import (
+    EventoAuditoria,
+    CategoriaAuditoria,
+    ResultadoAuditoria,
+    AccionAuditoria,
+)
 
 __all__ = [
     'SoftDeleteModel',
@@ -59,4 +65,8 @@ __all__ = [
     'ClasificacionTriage',
     'MotivoCierreBox',
     'HistorialReporteDiario',
+    'EventoAuditoria',
+    'CategoriaAuditoria',
+    'ResultadoAuditoria',
+    'AccionAuditoria',
 ]

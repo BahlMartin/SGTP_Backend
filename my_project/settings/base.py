@@ -112,6 +112,7 @@ MIDDLEWARE = [
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'auditlog.middleware.AuditlogMiddleware',
+    'app.middlewares.audit_context.AuditContextMiddleware',
     'app.middlewares.security.ShiftScheduleRestrictionMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
@@ -262,3 +263,13 @@ DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL')
 # 11. AUDITORÍA INALTERABLE (django-auditlog)
 # ==============================================================================
 AUDITLOG_ENABLED = env.bool('AUDITLOG_ENABLED', default=True)
+
+# ==============================================================================
+# 12. AUDITORÍA OPERACIONAL DE ACTIVIDAD (SGTP) & GEOLOCALIZACIÓN DB-IP
+# ==============================================================================
+AUDITORIA_PROXY_HOPS = env.int('AUDITORIA_PROXY_HOPS', default=2)
+AUDITORIA_RETENCION_DIAS = env.int('AUDITORIA_RETENCION_DIAS', default=365)
+AUDITORIA_REDES_CONFIABLES = env.list('AUDITORIA_REDES_CONFIABLES', default=[])
+GEOIP_DB_PATH = env('GEOIP_DB_PATH', default=str(BASE_DIR / 'geoip' / 'dbip-city-lite.mmdb'))
+DB_LIMITE_MB = env.int('DB_LIMITE_MB', default=500)
+

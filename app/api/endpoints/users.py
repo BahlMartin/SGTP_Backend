@@ -12,6 +12,8 @@ from rest_framework.routers import DefaultRouter
 from app.models.user import Personal, HabilitacionHoraria, PlanificacionHorasExtras
 from app.schemas.user import PersonalSerializer, HabilitacionHorariaSerializer, PlanificacionHorasExtrasSerializer
 from app.services.auth_service import AuthenticationService
+from app.services.audit_service import AuditService
+from app.models.audit import AccionAuditoria, ResultadoAuditoria
 from app.services.websocket_notifier import notificar_cambio_estado_personal
 from app.core.permissions import JerarquiaCreacionPersonalPermission, IsJefaRole
 
@@ -61,6 +63,16 @@ class PersonalViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer: PersonalSerializer) -> None:
         instance = serializer.save()
         notificar_cambio_estado_personal(instance, accion='ACTUALIZADO')
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.USUARIO_EDITADO,
+            usuario=self.request.user,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion=f'Modificación de perfil: {instance.nombre} {instance.apellidos} ({instance.email})',
+            entidad_tipo='Personal',
+            entidad_id=instance.pk,
+            metadata={'rol': instance.rol},
+            request=self.request
+        )
 
     def perform_destroy(self, instance: Personal) -> None:
         """Aplica borrado lógico (Soft-Delete) desactivando la cuenta del personal."""
@@ -74,6 +86,16 @@ class PersonalViewSet(viewsets.ModelViewSet):
         instance.restore()
         notificar_cambio_estado_personal(instance, accion='REACTIVADO')
         serializer = self.get_serializer(instance)
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.USUARIO_REACTIVADO,
+            usuario=request.user,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion=f'Reactivación de cuenta: {instance.nombre} {instance.apellidos} ({instance.email})',
+            entidad_tipo='Personal',
+            entidad_id=instance.pk,
+            metadata={'rol': instance.rol},
+            request=request
+        )
         return Response(
             {
                 "detail": f"Personal '{instance.nombre} {instance.apellidos}' reactivado exitosamente.",
@@ -181,11 +203,36 @@ class HabilitacionHorariaViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer: HabilitacionHorariaSerializer) -> None:
         inst = serializer.save(aprobado_por=self.request.user)
         notificar_cambio_estado_personal(inst.personal, accion='HABILITACION_HORARIA_CREADA')
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.HABILITACION_HORARIA_CREADA,
+            usuario=self.request.user,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion=f'Habilitación horaria autorizada para {inst.personal.email} ({inst.fecha})',
+            entidad_tipo='HabilitacionHoraria',
+            entidad_id=inst.pk,
+            metadata={
+                'personal': inst.personal.email,
+                'fecha': str(inst.fecha),
+                'hora_inicio': str(inst.hora_inicio),
+                'hora_fin': str(inst.hora_fin)
+            },
+            request=self.request
+        )
 
     def perform_destroy(self, instance: HabilitacionHoraria) -> None:
         """Aplica borrado lógico (Soft-Delete) desactivando la habilitación horaria."""
         instance.delete()
         notificar_cambio_estado_personal(instance.personal, accion='HABILITACION_HORARIA_REVOCADA')
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.HABILITACION_HORARIA_REVOCADA,
+            usuario=self.request.user,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion=f'Revocación de habilitación horaria de {instance.personal.email} ({instance.fecha})',
+            entidad_tipo='HabilitacionHoraria',
+            entidad_id=instance.pk,
+            metadata={'personal': instance.personal.email, 'fecha': str(instance.fecha)},
+            request=self.request
+        )
 
     @action(detail=True, methods=['patch'], url_path='reactivar')
     def reactivar(self, request, pk=None) -> Response:
@@ -345,6 +392,16 @@ class PlanificacionHorasExtrasViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer: PlanificacionHorasExtrasSerializer) -> None:
         inst = serializer.save(aprobado_por=self.request.user)
         notificar_cambio_estado_personal(inst.personal, accion='PLANIFICACION_CREADA')
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.HORAS_EXTRAS_PLANIFICADAS,
+            usuario=self.request.user,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion=f'Planificación de horas extras para {inst.personal.email} ({inst.mes}/{inst.anio})',
+            entidad_tipo='PlanificacionHorasExtras',
+            entidad_id=inst.pk,
+            metadata={'personal': inst.personal.email, 'anio': inst.anio, 'mes': inst.mes},
+            request=self.request
+        )
 
 
 app_name = 'users_endpoints'

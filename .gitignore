@@ -71,3 +71,8 @@ coverage.xml
 logs/
 Celerybeat-schedule
 celerybeat.pid
+
+# GeoIP database files (.mmdb)
+geoip/
+*.mmdb
+*.mmdb.gz
