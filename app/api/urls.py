@@ -17,4 +17,5 @@ urlpatterns = [
     path('ocr/', include('app.api.endpoints.ocr')),
     path('sla/', include('app.api.endpoints.sla')),
     path('auditoria/', include('app.api.endpoints.audit')),
+    path('turnos-recepcion/', include('app.api.endpoints.reception')),
 ]

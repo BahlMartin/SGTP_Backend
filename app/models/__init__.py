@@ -36,6 +36,11 @@ from app.models.audit import (
     ResultadoAuditoria,
     AccionAuditoria,
 )
+from app.models.reception import (
+    TurnoRecepcion,
+    EstadoTurnoRecepcion,
+    CategoriaTurnoRecepcion,
+)
 
 __all__ = [
     'SoftDeleteModel',
@@ -69,4 +74,7 @@ __all__ = [
     'CategoriaAuditoria',
     'ResultadoAuditoria',
     'AccionAuditoria',
+    'TurnoRecepcion',
+    'EstadoTurnoRecepcion',
+    'CategoriaTurnoRecepcion',
 ]

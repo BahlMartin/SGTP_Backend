@@ -27,6 +27,7 @@ from app.schemas.ticket import (
 )
 from app.services.ticket_service import TicketService
 from app.services.audit_service import AuditService
+from app.services.reception_service import ReceptionService
 from app.models.audit import AccionAuditoria, ResultadoAuditoria
 from app.services.triage_service import construir_orden_prioridad_case
 
@@ -153,6 +154,7 @@ class TicketViewSet(viewsets.ModelViewSet):
 
         # Notificar al WebSocket la creación del ticket (Cola, Boxes, Jefatura y Reportes)
         notificar_eventos_ticket(ticket, 'NEW_TICKET')
+        ReceptionService.finalizar_por_numero(ticket.num_totem)
 
         AuditService.registrar_evento(
             accion=AccionAuditoria.TICKET_CREADO,
