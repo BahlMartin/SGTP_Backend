@@ -186,7 +186,7 @@ class TicketService:
             qs = qs.filter(estudio__nombre__icontains=termino)
 
         conteo = (
-            qs.values('estudio__id', 'estudio__nombre', 'estudio__codigo_practica')
+            qs.values('estudio__id', 'estudio__nombre', 'estudio__codigo_practica', 'estudio__demora_horas')
             .annotate(total=Count('id'))
             .order_by('-total', 'estudio__nombre')
         )
@@ -205,7 +205,8 @@ class TicketService:
                 'nombre': item['estudio__nombre'],
                 'codigo': item['estudio__codigo_practica'],
                 'codigo_practica': item['estudio__codigo_practica'],
-                'total': item['total']
+                'total': item['total'],
+                'demora_horas': item.get('estudio__demora_horas') or 24
             }
             for item in conteo
         ]

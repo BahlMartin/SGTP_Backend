@@ -133,6 +133,9 @@ class TicketDetailSerializer(serializers.ModelSerializer):
     box_numero = serializers.ReadOnlyField(source='box_actual.numero')
     personal_admision_nombre = serializers.SerializerMethodField()
     personal_admision_matricula = serializers.SerializerMethodField()
+    fecha_estimada_entrega = serializers.SerializerMethodField()
+    demora_horas_max = serializers.SerializerMethodField()
+    estudio_mayor_demora = serializers.SerializerMethodField()
 
     class Meta:
         model = Ticket
@@ -151,6 +154,9 @@ class TicketDetailSerializer(serializers.ModelSerializer):
             'box_actual',
             'box_numero',
             'estudios',
+            'fecha_estimada_entrega',
+            'demora_horas_max',
+            'estudio_mayor_demora',
         ]
         read_only_fields = fields
 
@@ -163,6 +169,28 @@ class TicketDetailSerializer(serializers.ModelSerializer):
         if obj.personal_admision and obj.personal_admision.matricula:
             return str(obj.personal_admision.matricula)
         return ""
+
+    @extend_schema_field(serializers.DateTimeField(allow_null=True))
+    def get_fecha_estimada_entrega(self, obj: Ticket):
+        if getattr(obj, 'fecha_estimada_entrega', None):
+            return obj.fecha_estimada_entrega
+        from app.services.triage_service import TriageService
+        from django.utils import timezone
+        base = getattr(obj, 'fecha_hora_admision', None) or timezone.now()
+        fecha, _, _ = TriageService.calcular_fecha_estimada_entrega(obj, fecha_base=base)
+        return fecha
+
+    @extend_schema_field(serializers.IntegerField())
+    def get_demora_horas_max(self, obj: Ticket) -> int:
+        from app.services.triage_service import TriageService
+        _, max_horas, _ = TriageService.calcular_fecha_estimada_entrega(obj)
+        return max_horas
+
+    @extend_schema_field(serializers.CharField())
+    def get_estudio_mayor_demora(self, obj: Ticket) -> str:
+        from app.services.triage_service import TriageService
+        _, _, mayor = TriageService.calcular_fecha_estimada_entrega(obj)
+        return mayor
 
 
 

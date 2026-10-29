@@ -89,6 +89,11 @@ class Ticket(SoftDeleteModel):
         related_name='tickets_atendidos',
         verbose_name="Box que está atendiendo"
     )
+    fecha_estimada_entrega = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Fecha Estimada de Entrega de Resultados"
+    )
 
     class Meta:
         db_table = 'sgtp_ticket'

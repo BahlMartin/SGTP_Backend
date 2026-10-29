@@ -167,6 +167,48 @@ class TriageService:
         return ticket_seleccionado, asignacion
 
     @classmethod
+    def calcular_fecha_estimada_entrega(
+        cls,
+        ticket: Ticket,
+        fecha_base: Optional[timezone.datetime] = None
+    ) -> Tuple[timezone.datetime, int, str]:
+        """
+        Calcula la fecha estimada de entrega sumando la maxima demora en horas
+        de los estudios efectivos del ticket y ajustando a dias habiles (L-V).
+        Si cae sabado o domingo, posterga al lunes siguiente.
+        Retorna (fecha_entrega, max_horas, nombre_estudio_max).
+        """
+        if not fecha_base:
+            fecha_base = timezone.now()
+
+        estudios_rel = getattr(ticket, '_prefetched_objects_cache', {}).get('estudios')
+        if estudios_rel is not None:
+            estudios_efectivos = [te for te in estudios_rel if getattr(te, 'estado', None) != EstadoEstudio.CANCELADO]
+        else:
+            estudios_efectivos = list(
+                TicketEstudios.objects.filter(ticket=ticket)
+                .exclude(estado=EstadoEstudio.CANCELADO)
+                .select_related('estudio')
+            )
+
+        max_horas = 24
+        estudio_mayor = 'Rutina general'
+
+        if estudios_efectivos:
+            estudio_top = max(estudios_efectivos, key=lambda te: getattr(te.estudio, 'demora_horas', 24) or 24)
+            max_horas = getattr(estudio_top.estudio, 'demora_horas', 24) or 24
+            estudio_mayor = getattr(estudio_top.estudio, 'nombre', 'Rutina general')
+
+        fecha_entrega = fecha_base + timedelta(hours=max_horas)
+
+        if fecha_entrega.weekday() == 5:
+            fecha_entrega += timedelta(days=2)
+        elif fecha_entrega.weekday() == 6:
+            fecha_entrega += timedelta(days=1)
+
+        return fecha_entrega, max_horas, estudio_mayor
+
+    @classmethod
     @transaction.atomic
     def cerrar_atencion(
         cls,
@@ -206,10 +248,14 @@ class TriageService:
                 ticket = Ticket.objects.select_for_update().get(pk=asignacion.ticket.pk)
                 if motivo_cierre == MotivoCierreBox.CANCELADO:
                     ticket.estado = EstadoTicket.CANCELADO
+                    ticket.box_actual = None
+                    ticket.save(update_fields=['estado', 'box_actual'])
                 else:
                     ticket.estado = EstadoTicket.FINALIZADO
-                ticket.box_actual = None
-                ticket.save(update_fields=['estado', 'box_actual'])
+                    fecha_entrega, _, _ = cls.calcular_fecha_estimada_entrega(ticket, fecha_base=ahora)
+                    ticket.fecha_estimada_entrega = fecha_entrega
+                    ticket.box_actual = None
+                    ticket.save(update_fields=['estado', 'box_actual', 'fecha_estimada_entrega'])
 
         box.estado = EstadoBox.DISPONIBLE
         box.save(update_fields=['estado'])

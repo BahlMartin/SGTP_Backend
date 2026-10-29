@@ -15,6 +15,7 @@ class EstudiosSerializer(serializers.ModelSerializer):
             'seccion',
             'tipo_muestra',
             'activo',
+            'demora_horas',
         ]
 
 

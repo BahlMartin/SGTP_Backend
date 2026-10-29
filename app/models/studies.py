@@ -71,6 +71,10 @@ class Estudios(models.Model):
         default=True,
         verbose_name="Práctica Habilitada / Activa"
     )
+    demora_horas = models.PositiveIntegerField(
+        default=24,
+        verbose_name="Tiempo Estimado de Procesamiento (Horas)"
+    )
 
     class Meta:
         db_table = 'sgtp_estudios'

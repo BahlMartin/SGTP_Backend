@@ -27,7 +27,8 @@ from app.schemas.box import (
     CerrarAtencionSerializer,
     ModificarEstudiosBoxSerializer,
 )
-from app.schemas.ticket import TicketDetailSerializer
+from app.schemas.ticket import TicketDetailSerializer, TicketHistorialDetailSerializer
+from app.models.ticket import Ticket
 from app.services.triage_service import TriageService
 from app.core.permissions import IsBoxOrJefa
 from app.services.ticket_service import TicketService
@@ -287,11 +288,24 @@ class BoxViewSet(viewsets.ModelViewSet):
             else f"Atención del Box {box.numero} finalizada."
         )
 
+        ticket_data = None
+        if asignacion and asignacion.ticket:
+            ticket_instancia = Ticket.objects.select_related(
+                'paciente', 'personal_admision', 'box_actual'
+            ).prefetch_related(
+                'estudios__estudio',
+                'asignaciones_historial__personal',
+                'asignaciones_historial__box'
+            ).filter(pk=asignacion.ticket.pk).first()
+            if ticket_instancia:
+                ticket_data = TicketHistorialDetailSerializer(ticket_instancia).data
+
         return Response(
             {
                 "mensaje": mensaje_respuesta,
                 "box": BoxSerializer(box).data,
-                "asignacion": AsignacionesBoxSerializer(asignacion).data
+                "asignacion": AsignacionesBoxSerializer(asignacion).data,
+                "ticket": ticket_data
             },
             status=status.HTTP_200_OK
         )
