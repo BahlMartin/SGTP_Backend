@@ -4,7 +4,7 @@ Centraliza las reglas de validación de campos y datos de negocio transversales.
 """
 from datetime import datetime, date
 import re
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from rest_framework.exceptions import ValidationError as DRFValidationError
@@ -67,6 +67,36 @@ def validar_formato_fecha(valor: Optional[Any], formato: str = '%Y-%m-%d') -> Op
         )
 
 
+def validar_rango_fechas(
+    fecha_raw: Optional[Any] = None,
+    fecha_desde_raw: Optional[Any] = None,
+    fecha_hasta_raw: Optional[Any] = None
+) -> Tuple[Optional[date], Optional[date]]:
+    """
+    Valida y resuelve un rango de fechas [fecha_desde, fecha_hasta] o una fecha única.
+    - Si se proveen `fecha_desde` y/o `fecha_hasta`, se validan y se asegura que `fecha_desde <= fecha_hasta`.
+    - Si no se proveen, se utiliza `fecha` como día único (`(fecha, fecha)`).
+    """
+    fecha_unica = validar_formato_fecha(fecha_raw)
+    fecha_desde = validar_formato_fecha(fecha_desde_raw)
+    fecha_hasta = validar_formato_fecha(fecha_hasta_raw)
+
+    if fecha_desde or fecha_hasta:
+        inicio = fecha_desde or fecha_hasta
+        fin = fecha_hasta or fecha_desde
+        if inicio and fin and inicio > fin:
+            raise DRFValidationError(
+                {
+                    "error": "RANGO_FECHAS_INVALIDO",
+                    "detail": "La fecha 'Desde' no puede ser posterior a la fecha 'Hasta'."
+                },
+                code="RANGO_FECHAS_INVALIDO"
+            )
+        return inicio, fin
+
+    return fecha_unica, fecha_unica
+
+
 def validar_formato_email(valor: Optional[Any]) -> str:
     """
     Valida que el correo electrónico no esté vacío y tenga un formato válido.
@@ -101,5 +131,6 @@ __all__ = [
     'validar_dni_positivo',
     'validar_texto',
     'validar_formato_fecha',
+    'validar_rango_fechas',
     'validar_formato_email',
 ]

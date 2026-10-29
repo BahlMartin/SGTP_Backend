@@ -201,6 +201,8 @@ class ReportEmailService:
             return None
 
         fecha_str = metricas['fecha']
+        nombre_archivo_periodo = str(fecha_str).replace(' al ', '_a_')
+        fecha_ref_str = str(metricas.get('fecha_desde') or str(fecha_str).split(' al ')[0]).strip()
         contenido = construir_contenido_correo(metricas)
 
         exitoso = True
@@ -214,10 +216,10 @@ class ReportEmailService:
                 to=destinatarios_validos,
             )
             email.attach_alternative(contenido['html'], 'text/html')
-            email.attach(f"Informe_Diario_SGTP_{fecha_str}.pdf", pdf_bytes, 'application/pdf')
+            email.attach(f"Informe_Diario_SGTP_{nombre_archivo_periodo}.pdf", pdf_bytes, 'application/pdf')
             if excel_bytes:
                 email.attach(
-                    f"Informe_Diario_SGTP_{fecha_str}.xlsx",
+                    f"Informe_Diario_SGTP_{nombre_archivo_periodo}.xlsx",
                     excel_bytes,
                     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
                 )
@@ -229,7 +231,7 @@ class ReportEmailService:
 
         # Registrar trazabilidad en el modelo de auditoría
         historial = HistorialReporteDiario.objects.create(
-            fecha_reporte=datetime.strptime(fecha_str, '%Y-%m-%d').date(),
+            fecha_reporte=datetime.strptime(fecha_ref_str, '%Y-%m-%d').date(),
             total_pacientes_atendidos=metricas['total_atendidos'],
             total_estudios_realizados=metricas['total_estudios'],
             destinatarios_notificados=", ".join(destinatarios_validos),

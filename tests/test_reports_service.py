@@ -393,3 +393,34 @@ class ReportsServiceTestCase(TestCase):
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.data.get('error'), 'EMAIL_INVALIDO')
         self.assertEqual(len(mail.outbox), 0)
+
+    def test_consolidacion_y_endpoint_por_rango_de_fechas(self):
+        """Verifica que metricas-diarias consolide todos los días comprendidos entre fecha_desde y fecha_hasta."""
+        from rest_framework.test import APIClient
+        hoy = timezone.now().date()
+        ayer = hoy - timedelta(days=1)
+
+        # Crear un ticket con fecha de admisión de ayer
+        t_ayer = Ticket.objects.create(
+            num_totem='R-099',
+            personal_admision=self.jefa,
+            paciente=self.paciente,
+            clasificacion_triage=ClasificacionTriage.GUARDIA,
+            estado=EstadoTicket.FINALIZADO
+        )
+        Ticket.objects.filter(pk=t_ayer.pk).update(
+            fecha_hora_admision=timezone.now() - timedelta(days=1)
+        )
+
+        client = APIClient()
+        client.force_authenticate(user=self.secretaria)
+
+        res = client.get(
+            f'/app/reports/metricas-diarias/?fecha_desde={ayer.isoformat()}&fecha_hasta={hoy.isoformat()}'
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data['total_emitidos'], 2)
+        self.assertEqual(res.data['total_atendidos'], 2)
+        self.assertEqual(res.data['fecha_desde'], ayer.isoformat())
+        self.assertEqual(res.data['fecha_hasta'], hoy.isoformat())
+        self.assertEqual(res.data['fecha'], f'{ayer.isoformat()} al {hoy.isoformat()}')

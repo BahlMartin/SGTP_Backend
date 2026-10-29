@@ -22,6 +22,8 @@ class HistorialReporteDiarioSerializer(serializers.ModelSerializer):
 
 class DispararReporteRequestSerializer(serializers.Serializer):
     fecha = serializers.DateField(required=False, help_text="Fecha opcional YYYY-MM-DD")
+    fecha_desde = serializers.DateField(required=False, help_text="Fecha inicio de rango opcional YYYY-MM-DD")
+    fecha_hasta = serializers.DateField(required=False, help_text="Fecha fin de rango opcional YYYY-MM-DD")
     email_destinatario = serializers.EmailField(
         required=False,
         allow_blank=True,

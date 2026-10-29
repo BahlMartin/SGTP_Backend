@@ -15,12 +15,22 @@ from app.models.report import HistorialReporteDiario
 from app.schemas.report import HistorialReporteDiarioSerializer, DispararReporteRequestSerializer
 from app.services.reports.report_facade import ReportFacade
 from app.core.permissions import IsSecretariaOrJefa, IsJefaRole
-from app.core.validators import validar_formato_fecha, validar_formato_email
+from app.core.validators import validar_rango_fechas, validar_formato_email
 
 PARAMETRO_FECHA_CONSULTA = OpenApiParameter(
     'fecha',
     str,
-    description='Fecha a consultar en formato YYYY-MM-DD'
+    description='Fecha única a consultar en formato YYYY-MM-DD'
+)
+PARAMETRO_FECHA_DESDE = OpenApiParameter(
+    'fecha_desde',
+    str,
+    description='Fecha inicial del rango a consultar en formato YYYY-MM-DD'
+)
+PARAMETRO_FECHA_HASTA = OpenApiParameter(
+    'fecha_hasta',
+    str,
+    description='Fecha final del rango a consultar en formato YYYY-MM-DD'
 )
 
 XLSX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -28,65 +38,84 @@ XLSX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml
 
 class MetricasDiariasView(APIView):
     """
-    Retorna los indicadores consolidados de atención de la jornada en formato JSON.
-    Parámetro opcional: ?fecha=YYYY-MM-DD (por defecto hoy UTC).
+    Retorna los indicadores consolidados de atención de la jornada o período en formato JSON.
+    Parámetros opcionales: ?fecha=YYYY-MM-DD o ?fecha_desde=YYYY-MM-DD&fecha_hasta=YYYY-MM-DD.
     """
     permission_classes = [IsAuthenticated, IsSecretariaOrJefa]
 
     @extend_schema(
-        parameters=[PARAMETRO_FECHA_CONSULTA],
+        parameters=[PARAMETRO_FECHA_CONSULTA, PARAMETRO_FECHA_DESDE, PARAMETRO_FECHA_HASTA],
         responses={200: dict}
     )
     def get(self, request: Request) -> Response:
-        fecha = validar_formato_fecha(request.query_params.get('fecha'))
-        metricas = ReportFacade.consolidar_metricas_diarias(fecha)
+        fecha_desde, fecha_hasta = validar_rango_fechas(
+            request.query_params.get('fecha'),
+            request.query_params.get('fecha_desde'),
+            request.query_params.get('fecha_hasta'),
+        )
+        metricas = ReportFacade.consolidar_metricas_diarias(
+            fecha_desde,
+            fecha_hasta=fecha_hasta
+        )
         return Response(metricas, status=status.HTTP_200_OK)
 
 
 class DescargarReportePdfView(APIView):
     """
-    Genera en tiempo real y descarga el documento oficial PDF del reporte diario asistencial.
+    Genera en tiempo real y descarga el documento oficial PDF del reporte asistencial.
     """
     permission_classes = [IsAuthenticated, IsSecretariaOrJefa]
 
     @extend_schema(
-        parameters=[PARAMETRO_FECHA_CONSULTA],
+        parameters=[PARAMETRO_FECHA_CONSULTA, PARAMETRO_FECHA_DESDE, PARAMETRO_FECHA_HASTA],
         responses={(200, 'application/pdf'): bytes}
     )
     def get(self, request: Request) -> HttpResponse:
-        fecha = validar_formato_fecha(request.query_params.get('fecha'))
+        fecha_desde, fecha_hasta = validar_rango_fechas(
+            request.query_params.get('fecha'),
+            request.query_params.get('fecha_desde'),
+            request.query_params.get('fecha_hasta'),
+        )
         metricas = ReportFacade.consolidar_metricas_diarias(
-            fecha,
-            incluir_rendimiento_personal=True
+            fecha_desde,
+            incluir_rendimiento_personal=True,
+            fecha_hasta=fecha_hasta
         )
         pdf_bytes = ReportFacade.generar_pdf_reporte(metricas)
+        nombre_periodo = str(metricas['fecha']).replace(' al ', '_a_')
 
         response = HttpResponse(pdf_bytes, content_type='application/pdf')
-        response['Content-Disposition'] = f'attachment; filename="Reporte_Asistencial_{metricas["fecha"]}.pdf"'
+        response['Content-Disposition'] = f'attachment; filename="Reporte_Asistencial_{nombre_periodo}.pdf"'
         return response
 
 
 class DescargarReporteExcelView(APIView):
     """
-    Genera en tiempo real y descarga el libro oficial Excel (.xlsx) multi-hoja del reporte diario asistencial.
+    Genera en tiempo real y descarga el libro oficial Excel (.xlsx) multi-hoja del reporte asistencial.
     """
     permission_classes = [IsAuthenticated, IsSecretariaOrJefa]
 
     @extend_schema(
-        parameters=[PARAMETRO_FECHA_CONSULTA],
+        parameters=[PARAMETRO_FECHA_CONSULTA, PARAMETRO_FECHA_DESDE, PARAMETRO_FECHA_HASTA],
         responses={(200, XLSX_CONTENT_TYPE): bytes}
     )
     def get(self, request: Request) -> HttpResponse:
-        fecha = validar_formato_fecha(request.query_params.get('fecha'))
+        fecha_desde, fecha_hasta = validar_rango_fechas(
+            request.query_params.get('fecha'),
+            request.query_params.get('fecha_desde'),
+            request.query_params.get('fecha_hasta'),
+        )
         metricas = ReportFacade.consolidar_metricas_diarias(
-            fecha,
+            fecha_desde,
             incluir_detalle_excel=True,
-            incluir_rendimiento_personal=True
+            incluir_rendimiento_personal=True,
+            fecha_hasta=fecha_hasta
         )
         excel_bytes = ReportFacade.generar_excel_reporte(metricas)
+        nombre_periodo = str(metricas['fecha']).replace(' al ', '_a_')
 
         response = HttpResponse(excel_bytes, content_type=XLSX_CONTENT_TYPE)
-        response['Content-Disposition'] = f'attachment; filename="Reporte_Asistencial_{metricas["fecha"]}.xlsx"'
+        response['Content-Disposition'] = f'attachment; filename="Reporte_Asistencial_{nombre_periodo}.xlsx"'
         return response
 
 
@@ -119,8 +148,16 @@ class DispararEnvioReporteView(APIView):
                 )
             email_destinatario = validar_formato_email(user_email)
 
-        fecha = validar_formato_fecha(request.data.get('fecha'))
-        historial = ReportFacade.enviar_reporte_diario_por_email(fecha, destinatarios=[email_destinatario])
+        fecha_desde, fecha_hasta = validar_rango_fechas(
+            request.data.get('fecha') if isinstance(request.data, dict) else None,
+            request.data.get('fecha_desde') if isinstance(request.data, dict) else None,
+            request.data.get('fecha_hasta') if isinstance(request.data, dict) else None,
+        )
+        historial = ReportFacade.enviar_reporte_diario_por_email(
+            fecha_desde,
+            destinatarios=[email_destinatario],
+            fecha_hasta=fecha_hasta
+        )
 
         if not historial:
             return Response(

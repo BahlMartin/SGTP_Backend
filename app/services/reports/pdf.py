@@ -96,10 +96,16 @@ def _pct(parte: float, total: float) -> str:
 
 
 def _fecha_local(fecha_iso: str) -> str:
+    if not fecha_iso:
+        return 'N/D'
+    texto = str(fecha_iso).strip()
+    if ' al ' in texto:
+        partes = texto.split(' al ', 1)
+        return f"{_fecha_local(partes[0].strip())} - {_fecha_local(partes[1].strip())}"
     try:
-        return datetime.strptime(fecha_iso, '%Y-%m-%d').strftime('%d/%m/%Y')
+        return datetime.strptime(texto, '%Y-%m-%d').strftime('%d/%m/%Y')
     except (TypeError, ValueError):
-        return str(fecha_iso or 'N/D')
+        return texto
 
 
 def _truncar(texto: str, fuente: str, tam: float, ancho_max: float) -> str:

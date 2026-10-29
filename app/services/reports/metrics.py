@@ -67,10 +67,11 @@ class ReportMetricsService:
         cls,
         fecha_consulta: Optional[date] = None,
         incluir_detalle_excel: bool = False,
-        incluir_rendimiento_personal: bool = False
+        incluir_rendimiento_personal: bool = False,
+        fecha_hasta: Optional[date] = None
     ) -> Dict[str, Any]:
         """
-        Consolida los indicadores asistenciales de una jornada (00:00 a 23:59 UTC).
+        Consolida los indicadores asistenciales de una jornada o rango de fechas (00:00 a 23:59).
         Si `incluir_detalle_excel=False` (por defecto), calcula únicamente las métricas agregadas
         necesarias para el dashboard en tiempo real.
         Si `incluir_rendimiento_personal=True`, agrega los desgloses de rendimiento de admisión y box
@@ -81,8 +82,13 @@ class ReportMetricsService:
         if not fecha_consulta:
             fecha_consulta = timezone.now().date()
 
-        inicio_dia = timezone.make_aware(datetime.combine(fecha_consulta, time.min))
-        fin_dia = timezone.make_aware(datetime.combine(fecha_consulta, time.max))
+        fecha_inicio = fecha_consulta
+        fecha_fin = fecha_hasta or fecha_inicio
+        if fecha_fin < fecha_inicio:
+            fecha_inicio, fecha_fin = fecha_fin, fecha_inicio
+
+        inicio_dia = timezone.make_aware(datetime.combine(fecha_inicio, time.min))
+        fin_dia = timezone.make_aware(datetime.combine(fecha_fin, time.max))
 
         # ==============================================================================
         # 1. RESUMEN GLOBAL DE TICKETS
@@ -187,51 +193,109 @@ class ReportMetricsService:
         # 4. SEGMENTACIÓN POR FRANJAS HORARIAS HOSPITALARIAS
         # ==============================================================================
         franjas_horarias = []
-        for cfg in CONFIG_FRANJAS:
-            slot_inicio = timezone.make_aware(datetime.combine(fecha_consulta, cfg['hora_inicio']))
-            slot_fin = timezone.make_aware(datetime.combine(fecha_consulta, cfg['hora_fin']))
+        if fecha_inicio == fecha_fin:
+            for cfg in CONFIG_FRANJAS:
+                slot_inicio = timezone.make_aware(datetime.combine(fecha_inicio, cfg['hora_inicio']))
+                slot_fin = timezone.make_aware(datetime.combine(fecha_inicio, cfg['hora_fin']))
 
-            tickets_slot = tickets_dia.filter(fecha_hora_admision__range=(slot_inicio, slot_fin))
-            emitidos_slot = tickets_slot.count()
-            atendidos_slot = tickets_slot.filter(estado=EstadoTicket.FINALIZADO).count()
-            cancelados_slot = tickets_slot.filter(estado=EstadoTicket.CANCELADO).count()
+                tickets_slot = tickets_dia.filter(fecha_hora_admision__range=(slot_inicio, slot_fin))
+                emitidos_slot = tickets_slot.count()
+                atendidos_slot = tickets_slot.filter(estado=EstadoTicket.FINALIZADO).count()
+                cancelados_slot = tickets_slot.filter(estado=EstadoTicket.CANCELADO).count()
 
-            # Triage del slot
-            triage_slot = list(
-                tickets_slot.values('clasificacion_triage')
-                .annotate(cantidad=Count('pk'))
-                .order_by('-cantidad')
+                triage_slot = list(
+                    tickets_slot.values('clasificacion_triage')
+                    .annotate(cantidad=Count('pk'))
+                    .order_by('-cantidad')
+                )
+
+                asig_slot = asignaciones_dia.filter(fecha_hora_inicio__range=(slot_inicio, slot_fin))
+                esperas_slot = []
+                for a in asig_slot:
+                    if a.ticket and a.ticket.fecha_hora_admision:
+                        d = (a.fecha_hora_inicio - a.ticket.fecha_hora_admision).total_seconds() / 60.0
+                        if d >= 0:
+                            esperas_slot.append(d)
+                prom_esp_slot = round(sum(esperas_slot) / len(esperas_slot), 1) if esperas_slot else 0.0
+
+                atenciones_slot = []
+                for a in asig_slot:
+                    if a.fecha_hora_final and a.motivo_cierre != MotivoCierreBox.CANCELADO:
+                        d = (a.fecha_hora_final - a.fecha_hora_inicio).total_seconds() / 60.0
+                        if d >= 0:
+                            atenciones_slot.append(d)
+                prom_atn_slot = round(sum(atenciones_slot) / len(atenciones_slot), 1) if atenciones_slot else 0.0
+
+                franjas_horarias.append({
+                    'id': cfg['id'],
+                    'nombre': cfg['nombre'],
+                    'rango_display': cfg['rango_display'],
+                    'total_emitidos': emitidos_slot,
+                    'total_atendidos': atendidos_slot,
+                    'total_cancelados': cancelados_slot,
+                    'promedio_espera_minutos': prom_esp_slot,
+                    'promedio_atencion_minutos': prom_atn_slot,
+                    'distribucion_triage': triage_slot,
+                })
+        else:
+            tickets_periodo_list = list(
+                tickets_dia.values('fecha_hora_admision', 'estado', 'clasificacion_triage')
             )
+            asignaciones_periodo_list = list(asignaciones_dia)
 
-            # Asignaciones iniciadas en la franja
-            asig_slot = asignaciones_dia.filter(fecha_hora_inicio__range=(slot_inicio, slot_fin))
-            esperas_slot = []
-            for a in asig_slot:
-                if a.ticket and a.ticket.fecha_hora_admision:
-                    d = (a.fecha_hora_inicio - a.ticket.fecha_hora_admision).total_seconds() / 60.0
-                    if d >= 0:
-                        esperas_slot.append(d)
-            prom_esp_slot = round(sum(esperas_slot) / len(esperas_slot), 1) if esperas_slot else 0.0
+            for cfg in CONFIG_FRANJAS:
+                h_ini = cfg['hora_inicio']
+                h_fin = cfg['hora_fin']
 
-            atenciones_slot = []
-            for a in asig_slot:
-                if a.fecha_hora_final and a.motivo_cierre != MotivoCierreBox.CANCELADO:
-                    d = (a.fecha_hora_final - a.fecha_hora_inicio).total_seconds() / 60.0
-                    if d >= 0:
-                        atenciones_slot.append(d)
-            prom_atn_slot = round(sum(atenciones_slot) / len(atenciones_slot), 1) if atenciones_slot else 0.0
+                t_en_franja = [
+                    t for t in tickets_periodo_list
+                    if t['fecha_hora_admision']
+                    and h_ini <= timezone.localtime(t['fecha_hora_admision']).time() <= h_fin
+                ]
+                emitidos_slot = len(t_en_franja)
+                atendidos_slot = sum(1 for t in t_en_franja if t['estado'] == EstadoTicket.FINALIZADO)
+                cancelados_slot = sum(1 for t in t_en_franja if t['estado'] == EstadoTicket.CANCELADO)
 
-            franjas_horarias.append({
-                'id': cfg['id'],
-                'nombre': cfg['nombre'],
-                'rango_display': cfg['rango_display'],
-                'total_emitidos': emitidos_slot,
-                'total_atendidos': atendidos_slot,
-                'total_cancelados': cancelados_slot,
-                'promedio_espera_minutos': prom_esp_slot,
-                'promedio_atencion_minutos': prom_atn_slot,
-                'distribucion_triage': triage_slot,
-            })
+                conteo_triage_slot: Dict[str, int] = {}
+                for t in t_en_franja:
+                    ct = t['clasificacion_triage']
+                    conteo_triage_slot[ct] = conteo_triage_slot.get(ct, 0) + 1
+                triage_slot = [
+                    {'clasificacion_triage': k, 'cantidad': v}
+                    for k, v in sorted(conteo_triage_slot.items(), key=lambda x: x[1], reverse=True)
+                ]
+
+                a_en_franja = [
+                    a for a in asignaciones_periodo_list
+                    if a.fecha_hora_inicio
+                    and h_ini <= timezone.localtime(a.fecha_hora_inicio).time() <= h_fin
+                ]
+                esperas_slot = []
+                atenciones_slot = []
+                for a in a_en_franja:
+                    if a.ticket and a.ticket.fecha_hora_admision:
+                        d = (a.fecha_hora_inicio - a.ticket.fecha_hora_admision).total_seconds() / 60.0
+                        if d >= 0:
+                            esperas_slot.append(d)
+                    if a.fecha_hora_final and a.motivo_cierre != MotivoCierreBox.CANCELADO:
+                        d = (a.fecha_hora_final - a.fecha_hora_inicio).total_seconds() / 60.0
+                        if d >= 0:
+                            atenciones_slot.append(d)
+
+                prom_esp_slot = round(sum(esperas_slot) / len(esperas_slot), 1) if esperas_slot else 0.0
+                prom_atn_slot = round(sum(atenciones_slot) / len(atenciones_slot), 1) if atenciones_slot else 0.0
+
+                franjas_horarias.append({
+                    'id': cfg['id'],
+                    'nombre': cfg['nombre'],
+                    'rango_display': cfg['rango_display'],
+                    'total_emitidos': emitidos_slot,
+                    'total_atendidos': atendidos_slot,
+                    'total_cancelados': cancelados_slot,
+                    'promedio_espera_minutos': prom_esp_slot,
+                    'promedio_atencion_minutos': prom_atn_slot,
+                    'distribucion_triage': triage_slot,
+                })
 
         # ==============================================================================
         # 5. ESTUDIOS POR SECCIÓN BIOQUÍMICA Y DETALLE DE TODAS LAS PRÁCTICAS
@@ -357,8 +421,16 @@ class ReportMetricsService:
             ticket__estado=EstadoTicket.FINALIZADO,
         )
 
+        fecha_etiqueta = (
+            str(fecha_inicio)
+            if fecha_inicio == fecha_fin
+            else f"{fecha_inicio} al {fecha_fin}"
+        )
+
         resultado: Dict[str, Any] = {
-            'fecha': str(fecha_consulta),
+            'fecha': fecha_etiqueta,
+            'fecha_desde': str(fecha_inicio),
+            'fecha_hasta': str(fecha_fin),
             # KPIs generales y de flujo
             'total_emitidos': total_emitidos,
             'total_atendidos': total_atendidos,
@@ -631,11 +703,14 @@ class ReportMetricsService:
                 'promedio_atencion_minutos': prom_b,
             })
 
-        # 9.5 Horas Extras y Excepciones Horarias del Día (Hoja 4)
+        # 9.5 Horas Extras y Excepciones Horarias del Período (Hoja 4)
         habilitaciones_qs = (
-            HabilitacionHoraria.objects.filter(fecha=fecha_consulta, activa=True)
+            HabilitacionHoraria.objects.filter(
+                fecha__range=(fecha_inicio, fecha_fin),
+                activa=True
+            )
             .select_related('personal', 'aprobado_por', 'planificacion')
-            .order_by('hora_inicio', 'personal__apellidos', 'personal__nombre')
+            .order_by('fecha', 'hora_inicio', 'personal__apellidos', 'personal__nombre')
         )
         horas_extras_dia = []
         for hab in habilitaciones_qs:
@@ -645,8 +720,8 @@ class ReportMetricsService:
             else:
                 horario_hab_txt = 'Sin turno fijo'
 
-            dt_ini = datetime.combine(fecha_consulta, hab.hora_inicio)
-            dt_fin = datetime.combine(fecha_consulta, hab.hora_fin)
+            dt_ini = datetime.combine(hab.fecha, hab.hora_inicio)
+            dt_fin = datetime.combine(hab.fecha, hab.hora_fin)
             segundos_extra = (dt_fin - dt_ini).total_seconds()
             if segundos_extra < 0:
                 segundos_extra += 86400

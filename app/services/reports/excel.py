@@ -62,10 +62,16 @@ ETIQUETAS_TRIAGE: Dict[str, str] = {
 
 
 def _fecha_legible(fecha_iso: str) -> str:
+    if not fecha_iso:
+        return 'N/D'
+    texto = str(fecha_iso).strip()
+    if ' al ' in texto:
+        partes = texto.split(' al ', 1)
+        return f"{_fecha_legible(partes[0].strip())} - {_fecha_legible(partes[1].strip())}"
     try:
-        return datetime.strptime(str(fecha_iso), '%Y-%m-%d').strftime('%d/%m/%Y')
+        return datetime.strptime(texto, '%Y-%m-%d').strftime('%d/%m/%Y')
     except (TypeError, ValueError):
-        return str(fecha_iso or 'N/D')
+        return texto
 
 
 class ReportExcelGenerator:
