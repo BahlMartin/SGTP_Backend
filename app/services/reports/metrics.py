@@ -66,12 +66,15 @@ class ReportMetricsService:
     def consolidar(
         cls,
         fecha_consulta: Optional[date] = None,
-        incluir_detalle_excel: bool = False
+        incluir_detalle_excel: bool = False,
+        incluir_rendimiento_personal: bool = False
     ) -> Dict[str, Any]:
         """
         Consolida los indicadores asistenciales de una jornada (00:00 a 23:59 UTC).
         Si `incluir_detalle_excel=False` (por defecto), calcula únicamente las métricas agregadas
-        necesarias para el dashboard en tiempo real y el reporte PDF.
+        necesarias para el dashboard en tiempo real.
+        Si `incluir_rendimiento_personal=True`, agrega los desgloses de rendimiento de admisión y box
+        requeridos por el anexo del reporte PDF.
         Si `incluir_detalle_excel=True`, ejecuta además las consultas nominales y desgloses
         adicionales requeridos por las 6 hojas del reporte Excel (.xlsx).
         """
@@ -346,75 +349,12 @@ class ReportMetricsService:
         }
 
         # ==============================================================================
-        # 8. RENDIMIENTO DE PERSONAL SEGMENTADO POR ÁREA (ADMISIÓN VS. BOX)
+        # 8. RENDIMIENTO DE PERSONAL SEGMENTADO POR ÁREA (SOLO PARA PDF / EXCEL)
         # ==============================================================================
-        rendimiento_admision = list(
-            tickets_dia.values(
-                'personal_admision__id_personal',
-                'personal_admision__nombre',
-                'personal_admision__apellidos',
-                'personal_admision__dni',
-                'personal_admision__matricula',
-                'personal_admision__email'
-            )
-            .annotate(pacientes_recepcionados=Count('id_ticket'))
-            .order_by('-pacientes_recepcionados')
-        )
-        for p in rendimiento_admision:
-            p['nombre_completo'] = f"{p['personal_admision__apellidos']}, {p['personal_admision__nombre']}"
-
         filtro_atendido_box = Q(motivo_cierre=MotivoCierreBox.FINALIZADO) | Q(
             motivo_cierre__isnull=True,
             fecha_hora_final__isnull=False,
             ticket__estado=EstadoTicket.FINALIZADO,
-        )
-        rendimiento_box_raw = list(
-            asignaciones_dia.values(
-                'personal__id_personal',
-                'personal__nombre',
-                'personal__apellidos',
-                'personal__dni',
-                'personal__matricula',
-                'personal__email'
-            )
-            .annotate(
-                pacientes_atendidos=Count('id', filter=filtro_atendido_box),
-                pacientes_ausentes=Count('id', filter=Q(motivo_cierre=MotivoCierreBox.CANCELADO)),
-                total_convocados=Count('id')
-            )
-            .order_by('-pacientes_atendidos')
-        )
-        rendimiento_box = []
-        for p in rendimiento_box_raw:
-            pid = p['personal__id_personal']
-            tiempos_p = tiempos_atencion_por_personal.get(pid, [])
-            prom_p = round(sum(tiempos_p) / len(tiempos_p), 1) if tiempos_p else 0.0
-            rendimiento_box.append({
-                'id_personal': pid,
-                'nombre_completo': f"{p['personal__apellidos']}, {p['personal__nombre']}",
-                'dni': p.get('personal__dni') or '—',
-                'matricula': p.get('personal__matricula') or '—',
-                'email': p['personal__email'],
-                'pacientes_atendidos': p['pacientes_atendidos'],
-                'pacientes_ausentes': p.get('pacientes_ausentes', 0),
-                'total_convocados': p.get('total_convocados', p['pacientes_atendidos']),
-                'promedio_atencion_minutos': prom_p,
-            })
-
-        # Compatibilidad retroactiva con rendimiento_personal general
-        rendimiento_personal = list(
-            asignaciones_dia.values(
-                'personal__nombre',
-                'personal__apellidos',
-                'personal__rol',
-                'personal__email'
-            )
-            .annotate(
-                pacientes_atendidos=Count('id', filter=filtro_atendido_box),
-                pacientes_ausentes=Count('id', filter=Q(motivo_cierre=MotivoCierreBox.CANCELADO)),
-                total_convocados=Count('id')
-            )
-            .order_by('-pacientes_atendidos')
         )
 
         resultado: Dict[str, Any] = {
@@ -441,12 +381,77 @@ class ReportMetricsService:
             'insumos_tubos': insumos_tubos,
             # Auditoría de Box
             'auditoria_box': auditoria_box,
-            # Rendimiento segmentado por área
-            'rendimiento_admision': rendimiento_admision,
-            'rendimiento_box': rendimiento_box,
-            # Retrocompatibilidad
-            'rendimiento_personal': rendimiento_personal,
         }
+
+        if incluir_rendimiento_personal or incluir_detalle_excel:
+            rendimiento_admision = list(
+                tickets_dia.values(
+                    'personal_admision__id_personal',
+                    'personal_admision__nombre',
+                    'personal_admision__apellidos',
+                    'personal_admision__dni',
+                    'personal_admision__matricula',
+                    'personal_admision__email'
+                )
+                .annotate(pacientes_recepcionados=Count('id_ticket'))
+                .order_by('-pacientes_recepcionados')
+            )
+            for p in rendimiento_admision:
+                p['nombre_completo'] = f"{p['personal_admision__apellidos']}, {p['personal_admision__nombre']}"
+
+            rendimiento_box_raw = list(
+                asignaciones_dia.values(
+                    'personal__id_personal',
+                    'personal__nombre',
+                    'personal__apellidos',
+                    'personal__dni',
+                    'personal__matricula',
+                    'personal__email'
+                )
+                .annotate(
+                    pacientes_atendidos=Count('id', filter=filtro_atendido_box),
+                    pacientes_ausentes=Count('id', filter=Q(motivo_cierre=MotivoCierreBox.CANCELADO)),
+                    total_convocados=Count('id')
+                )
+                .order_by('-pacientes_atendidos')
+            )
+            rendimiento_box = []
+            for p in rendimiento_box_raw:
+                pid = p['personal__id_personal']
+                tiempos_p = tiempos_atencion_por_personal.get(pid, [])
+                prom_p = round(sum(tiempos_p) / len(tiempos_p), 1) if tiempos_p else 0.0
+                rendimiento_box.append({
+                    'id_personal': pid,
+                    'nombre_completo': f"{p['personal__apellidos']}, {p['personal__nombre']}",
+                    'dni': p.get('personal__dni') or '—',
+                    'matricula': p.get('personal__matricula') or '—',
+                    'email': p['personal__email'],
+                    'pacientes_atendidos': p['pacientes_atendidos'],
+                    'pacientes_ausentes': p.get('pacientes_ausentes', 0),
+                    'total_convocados': p.get('total_convocados', p['pacientes_atendidos']),
+                    'promedio_atencion_minutos': prom_p,
+                })
+
+            rendimiento_personal = list(
+                asignaciones_dia.values(
+                    'personal__nombre',
+                    'personal__apellidos',
+                    'personal__rol',
+                    'personal__email'
+                )
+                .annotate(
+                    pacientes_atendidos=Count('id', filter=filtro_atendido_box),
+                    pacientes_ausentes=Count('id', filter=Q(motivo_cierre=MotivoCierreBox.CANCELADO)),
+                    total_convocados=Count('id')
+                )
+                .order_by('-pacientes_atendidos')
+            )
+
+            resultado.update({
+                'rendimiento_admision': rendimiento_admision,
+                'rendimiento_box': rendimiento_box,
+                'rendimiento_personal': rendimiento_personal,
+            })
 
         if not incluir_detalle_excel:
             return resultado

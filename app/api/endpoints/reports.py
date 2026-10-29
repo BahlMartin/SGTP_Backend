@@ -55,7 +55,10 @@ class DescargarReportePdfView(APIView):
     )
     def get(self, request: Request) -> HttpResponse:
         fecha = validar_formato_fecha(request.query_params.get('fecha'))
-        metricas = ReportFacade.consolidar_metricas_diarias(fecha)
+        metricas = ReportFacade.consolidar_metricas_diarias(
+            fecha,
+            incluir_rendimiento_personal=True
+        )
         pdf_bytes = ReportFacade.generar_pdf_reporte(metricas)
 
         response = HttpResponse(pdf_bytes, content_type='application/pdf')
@@ -75,7 +78,11 @@ class DescargarReporteExcelView(APIView):
     )
     def get(self, request: Request) -> HttpResponse:
         fecha = validar_formato_fecha(request.query_params.get('fecha'))
-        metricas = ReportFacade.consolidar_metricas_diarias(fecha, incluir_detalle_excel=True)
+        metricas = ReportFacade.consolidar_metricas_diarias(
+            fecha,
+            incluir_detalle_excel=True,
+            incluir_rendimiento_personal=True
+        )
         excel_bytes = ReportFacade.generar_excel_reporte(metricas)
 
         response = HttpResponse(excel_bytes, content_type=XLSX_CONTENT_TYPE)

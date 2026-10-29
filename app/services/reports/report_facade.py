@@ -26,7 +26,8 @@ class ReportFacade:
     def consolidar_metricas_diarias(
         cls,
         fecha_consulta: Optional[date] = None,
-        incluir_detalle_excel: bool = False
+        incluir_detalle_excel: bool = False,
+        incluir_rendimiento_personal: bool = False
     ) -> Dict[str, Any]:
         """
         Delega el cálculo de indicadores asistenciales a ReportMetricsService.
@@ -35,7 +36,8 @@ class ReportFacade:
         """
         return ReportMetricsService.consolidar(
             fecha_consulta,
-            incluir_detalle_excel=incluir_detalle_excel
+            incluir_detalle_excel=incluir_detalle_excel,
+            incluir_rendimiento_personal=incluir_rendimiento_personal
         )
 
     @classmethod
@@ -68,7 +70,10 @@ class ReportFacade:
         if not destinatarios:
             return None
 
-        metricas = cls.consolidar_metricas_diarias(fecha_consulta)
+        metricas = cls.consolidar_metricas_diarias(
+            fecha_consulta,
+            incluir_rendimiento_personal=True
+        )
         pdf_bytes = cls.generar_pdf_reporte(metricas)
         return ReportEmailService.despachar(metricas, pdf_bytes, destinatarios=destinatarios)
 
