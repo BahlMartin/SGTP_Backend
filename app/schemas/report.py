@@ -22,6 +22,12 @@ class HistorialReporteDiarioSerializer(serializers.ModelSerializer):
 
 class DispararReporteRequestSerializer(serializers.Serializer):
     fecha = serializers.DateField(required=False, help_text="Fecha opcional YYYY-MM-DD")
+    email_destinatario = serializers.EmailField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        help_text="Correo electrónico opcional del destinatario (si se omite, se envía al usuario autenticado)"
+    )
 
 
 # Alias

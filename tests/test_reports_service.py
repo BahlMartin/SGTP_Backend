@@ -361,3 +361,34 @@ class ReportsServiceTestCase(TestCase):
         self.assertEqual(res.status_code, 401)
         self.assertEqual(res.data.get('error'), 'EMAIL_NO_ENCONTRADO')
         self.assertEqual(len(mail.outbox), 0)
+
+    def test_disparar_envio_a_tercero_exitoso(self):
+        """Verifica que disparar-envio permita enviar a un correo de tercero escrito manualmente."""
+        from rest_framework.test import APIClient
+        client = APIClient()
+        client.force_authenticate(user=self.secretaria)
+
+        res = client.post(
+            '/app/reports/disparar-envio/',
+            {'email_destinatario': 'tercero@externo.com'},
+            format='json'
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ['tercero@externo.com'])
+        self.assertIn('tercero@externo.com', res.data.get('mensaje', ''))
+
+    def test_disparar_envio_con_email_invalido_retorna_400(self):
+        """Verifica que si el email_destinatario no tiene formato válido retorne 400 con EMAIL_INVALIDO."""
+        from rest_framework.test import APIClient
+        client = APIClient()
+        client.force_authenticate(user=self.secretaria)
+
+        res = client.post(
+            '/app/reports/disparar-envio/',
+            {'email_destinatario': 'correo-mal-formado'},
+            format='json'
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data.get('error'), 'EMAIL_INVALIDO')
+        self.assertEqual(len(mail.outbox), 0)

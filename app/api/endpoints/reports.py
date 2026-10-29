@@ -15,7 +15,7 @@ from app.models.report import HistorialReporteDiario
 from app.schemas.report import HistorialReporteDiarioSerializer, DispararReporteRequestSerializer
 from app.services.reports.report_facade import ReportFacade
 from app.core.permissions import IsSecretariaOrJefa, IsJefaRole
-from app.core.validators import validar_formato_fecha
+from app.core.validators import validar_formato_fecha, validar_formato_email
 
 PARAMETRO_FECHA_CONSULTA = OpenApiParameter(
     'fecha',
@@ -102,16 +102,22 @@ class DispararEnvioReporteView(APIView):
     def post(self, request: Request) -> Response:
 
         user = request.user
-        email_destinatario = getattr(user, 'email', None) if (user and user.is_authenticated) else None
+        raw_email_destinatario = request.data.get('email_destinatario') if isinstance(request.data, dict) else None
 
-        if not email_destinatario:
-            return Response(
-                {
-                    "error": "EMAIL_NO_ENCONTRADO",
-                    "detalle": "No se encontró el email del usuario logeado para enviar el reporte."
-                },
-                status=status.HTTP_401_UNAUTHORIZED
-            )
+        if raw_email_destinatario is not None:
+            email_destinatario = validar_formato_email(raw_email_destinatario)
+        else:
+            user_email = getattr(user, 'email', None) if (user and user.is_authenticated) else None
+            if not user_email or not str(user_email).strip():
+                return Response(
+                    {
+                        "error": "EMAIL_NO_ENCONTRADO",
+                        "detail": "No se encontró el email del usuario logeado para enviar el reporte.",
+                        "detalle": "No se encontró el email del usuario logeado para enviar el reporte."
+                    },
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+            email_destinatario = validar_formato_email(user_email)
 
         fecha = validar_formato_fecha(request.data.get('fecha'))
         historial = ReportFacade.enviar_reporte_diario_por_email(fecha, destinatarios=[email_destinatario])
@@ -120,18 +126,34 @@ class DispararEnvioReporteView(APIView):
             return Response(
                 {
                     "error": "ENVIO_CANCELADO",
+                    "detail": "No se pudo despachar el reporte por correo electrónico.",
                     "detalle": "No se pudo despachar el reporte por correo."
                 },
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
         serializer = HistorialReporteDiarioSerializer(historial)
+        if not historial.exitoso:
+            detalle_error = (
+                f"No se pudo enviar el reporte al correo {email_destinatario}. "
+                f"{historial.error_detalle or 'Verifique el destinatario o la conexión con el servidor de correo.'}"
+            ).strip()
+            return Response(
+                {
+                    "error": "ERROR_ENVIO_CORREO",
+                    "detail": detalle_error,
+                    "detalle": detalle_error,
+                    "resultado": serializer.data
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
         return Response(
             {
-                "mensaje": "Despacho de reporte asistencial ejecutado.",
+                "mensaje": f"Reporte asistencial enviado exitosamente a {email_destinatario}.",
                 "resultado": serializer.data
             },
-            status=status.HTTP_200_OK if historial.exitoso else status.HTTP_500_INTERNAL_SERVER_ERROR
+            status=status.HTTP_200_OK
         )
 
 

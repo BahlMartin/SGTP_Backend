@@ -6,6 +6,7 @@ from datetime import datetime, date
 import re
 from typing import Any, Optional
 from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
 from rest_framework.exceptions import ValidationError as DRFValidationError
 
 
@@ -66,9 +67,39 @@ def validar_formato_fecha(valor: Optional[Any], formato: str = '%Y-%m-%d') -> Op
         )
 
 
+def validar_formato_email(valor: Optional[Any]) -> str:
+    """
+    Valida que el correo electrónico no esté vacío y tenga un formato válido.
+    Si no es válido, lanza rest_framework.exceptions.ValidationError con estructura estándar.
+    """
+    texto = str(valor or "").strip()
+    if not texto:
+        raise DRFValidationError(
+            {
+                "error": "EMAIL_INVALIDO",
+                "detail": "Debe ingresar una dirección de correo electrónico válida.",
+                "detalle": "Debe ingresar una dirección de correo electrónico válida."
+            },
+            code="EMAIL_INVALIDO"
+        )
+    try:
+        validate_email(texto)
+        return texto
+    except ValidationError:
+        raise DRFValidationError(
+            {
+                "error": "EMAIL_INVALIDO",
+                "detail": f"El formato del correo electrónico '{texto}' no es válido.",
+                "detalle": f"El formato del correo electrónico '{texto}' no es válido."
+            },
+            code="EMAIL_INVALIDO"
+        )
+
+
 __all__ = [
     'validar_solo_letras_min2',
     'validar_dni_positivo',
     'validar_texto',
     'validar_formato_fecha',
+    'validar_formato_email',
 ]
