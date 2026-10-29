@@ -3,6 +3,7 @@ import logging
 import asyncio
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
+from django.core.serializers.json import DjangoJSONEncoder
 from app.models.user import RolPersonal
 from app.middlewares.ws_auth import get_user_from_session
 
@@ -33,7 +34,7 @@ class BaseHospitalConsumer(AsyncWebsocketConsumer):
         Handler genérico para enviar mensajes transmitidos por el group_send de Channel Layer.
         """
         payload = event.get('payload', {})
-        await self.send(text_data=json.dumps(payload))
+        await self.send(text_data=json.dumps(payload, cls=DjangoJSONEncoder))
 
     async def receive(self, text_data=None, bytes_data=None):
         """

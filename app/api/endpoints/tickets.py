@@ -38,26 +38,39 @@ def notificar_eventos_ticket(ticket_instance, accion='NEW_TICKET'):
     sobre la creación o cambio de un ticket.
     """
     channel_layer = get_channel_layer()
-    payload = {
+    if not channel_layer:
+        return
+
+    data = TicketDetailSerializer(ticket_instance).data
+    payload_ticket = {
         'type': 'broadcast_event',
         'payload': {
             'event': 'TICKET_CREATED',
             'action': accion,
-            'data': TicketDetailSerializer(ticket_instance).data
+            'data': data
+        }
+    }
+    payload_queue = {
+        'type': 'broadcast_event',
+        'payload': {
+            'event': 'QUEUE_UPDATED',
+            'action': 'TICKET_CREATED',
+            'data': data
         }
     }
 
     # 1. Notificar al panel de la Jefa (Monitor Operativo)
-    async_to_sync(channel_layer.group_send)('sgtp_monitor_operativo', payload)
+    async_to_sync(channel_layer.group_send)('sgtp_monitor_operativo', payload_ticket)
 
-    # 2. Notificar a las Pantallas de Sala de Espera / Cola Multibox
-    async_to_sync(channel_layer.group_send)('sgtp_queue_live', payload)
+    # 2. Notificar a las Pantallas de Sala de Espera / Cola Multibox (ambos eventos)
+    async_to_sync(channel_layer.group_send)('sgtp_queue_live', payload_queue)
+    async_to_sync(channel_layer.group_send)('sgtp_queue_live', payload_ticket)
 
     # 3. Notificar a los Técnicos / Admisión (Últimos ingresos)
-    async_to_sync(channel_layer.group_send)('sgtp_tickets_live', payload)
+    async_to_sync(channel_layer.group_send)('sgtp_tickets_live', payload_ticket)
 
     # 4. Notificar a la vista de Reportes (Secretaría / Jefa)
-    async_to_sync(channel_layer.group_send)('sgtp_reports_live', payload)
+    async_to_sync(channel_layer.group_send)('sgtp_reports_live', payload_ticket)
 
 
 class TicketViewSet(viewsets.ModelViewSet):

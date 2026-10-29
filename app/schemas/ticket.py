@@ -172,13 +172,13 @@ class TicketDetailSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(serializers.DateTimeField(allow_null=True))
     def get_fecha_estimada_entrega(self, obj: Ticket):
-        if getattr(obj, 'fecha_estimada_entrega', None):
-            return obj.fecha_estimada_entrega
-        from app.services.triage_service import TriageService
-        from django.utils import timezone
-        base = getattr(obj, 'fecha_hora_admision', None) or timezone.now()
-        fecha, _, _ = TriageService.calcular_fecha_estimada_entrega(obj, fecha_base=base)
-        return fecha
+        fecha = getattr(obj, 'fecha_estimada_entrega', None)
+        if not fecha:
+            from app.services.triage_service import TriageService
+            from django.utils import timezone
+            base = getattr(obj, 'fecha_hora_admision', None) or timezone.now()
+            fecha, _, _ = TriageService.calcular_fecha_estimada_entrega(obj, fecha_base=base)
+        return fecha.isoformat() if hasattr(fecha, 'isoformat') else (str(fecha) if fecha else None)
 
     @extend_schema_field(serializers.IntegerField())
     def get_demora_horas_max(self, obj: Ticket) -> int:
