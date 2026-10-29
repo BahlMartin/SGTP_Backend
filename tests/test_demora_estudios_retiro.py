@@ -155,3 +155,23 @@ class DemoraEstudiosRetiroTestCase(APITestCase):
         self.urocultivo.refresh_from_db()
         self.assertEqual(self.urocultivo.demora_horas, 48)
 
+    def test_ticket_creado_en_admision_no_calcula_retiro_hasta_cerrar_box(self):
+        """Al emitirse en admisión, el ticket no posee fecha_estimada_entrega hasta ser atendido en Box."""
+        self.client.force_authenticate(user=self.jefa)
+
+        response = self.client.post(
+            '/app/tickets/',
+            {
+                'num_totem': 'Ext-99',
+                'paciente_id': self.paciente.pk,
+                'clasificacion_triage': ClasificacionTriage.EXTRACCION_CON_TURNO,
+                'estudios_ids': [self.urocultivo.id],
+            },
+            format='json'
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        ticket_data = response.data
+        self.assertIsNone(ticket_data['fecha_estimada_entrega'])
+        self.assertIsNone(ticket_data['demora_horas_max'])
+        self.assertIsNone(ticket_data['estudio_mayor_demora'])
+

@@ -174,20 +174,24 @@ class TicketDetailSerializer(serializers.ModelSerializer):
     def get_fecha_estimada_entrega(self, obj: Ticket):
         fecha = getattr(obj, 'fecha_estimada_entrega', None)
         if not fecha:
-            from app.services.triage_service import TriageService
-            from django.utils import timezone
-            base = getattr(obj, 'fecha_hora_admision', None) or timezone.now()
-            fecha, _, _ = TriageService.calcular_fecha_estimada_entrega(obj, fecha_base=base)
+            return None
+
+
+
         return fecha.isoformat() if hasattr(fecha, 'isoformat') else (str(fecha) if fecha else None)
 
-    @extend_schema_field(serializers.IntegerField())
-    def get_demora_horas_max(self, obj: Ticket) -> int:
+    @extend_schema_field(serializers.IntegerField(allow_null=True))
+    def get_demora_horas_max(self, obj: Ticket):
+        if not getattr(obj, 'fecha_estimada_entrega', None):
+            return None
         from app.services.triage_service import TriageService
         _, max_horas, _ = TriageService.calcular_fecha_estimada_entrega(obj)
         return max_horas
 
-    @extend_schema_field(serializers.CharField())
-    def get_estudio_mayor_demora(self, obj: Ticket) -> str:
+    @extend_schema_field(serializers.CharField(allow_null=True))
+    def get_estudio_mayor_demora(self, obj: Ticket):
+        if not getattr(obj, 'fecha_estimada_entrega', None):
+            return None
         from app.services.triage_service import TriageService
         _, _, mayor = TriageService.calcular_fecha_estimada_entrega(obj)
         return mayor

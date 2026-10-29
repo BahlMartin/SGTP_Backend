@@ -138,10 +138,10 @@ class TicketViewSet(viewsets.ModelViewSet):
             for estudio in estudios_queryset:
                 TicketEstudios.objects.create(ticket=ticket, estudio=estudio)
 
-            from app.services.triage_service import TriageService
-            fecha_entrega, _, _ = TriageService.calcular_fecha_estimada_entrega(ticket, fecha_base=ticket.fecha_hora_admision)
-            ticket.fecha_estimada_entrega = fecha_entrega
-            ticket.save(update_fields=['fecha_estimada_entrega'])
+
+
+
+
 
     def create(self, request: Request, *args, **kwargs) -> Response:
         serializer = self.get_serializer(data=request.data)
