@@ -209,6 +209,88 @@ class TicketEstudios(models.Model):
 auditlog.register(Ticket)
 auditlog.register(TicketEstudios)
 
+
+class ConfiguracionSlaTriage(models.Model):
+    """
+    Configuración de tiempos máximos objetivos (SLA) de espera por categoría de Triage.
+    Permite a la jefatura calibrar los umbrales utilizados en los reportes operativos y gerenciales.
+    """
+    DEFAULT_CONFIGS = [
+        ('guardia', 5, 'Urgencia Inmediata / Guardia Médica', 1),
+        ('medicos', 10, 'Personal Sanitario y Médicos del Hospital', 2),
+        ('discapacidad', 10, 'Movilidad Reducida y Adultos Mayores', 3),
+        ('oncologia', 15, 'Pacientes Oncológicos e Inmunodeprimidos', 4),
+        ('extraccion con turno', 15, 'Extracción con Turno Programado', 5),
+        ('extraccion sin turno', 30, 'Extracción Espontánea sin Turno', 6),
+        ('otro', 30, 'Atención Especial con Justificación Médica', 7),
+    ]
+
+    id = models.AutoField(primary_key=True)
+    clasificacion_triage = models.CharField(
+        max_length=50,
+        choices=ClasificacionTriage.choices,
+        unique=True,
+        verbose_name="Clasificación de Triage"
+    )
+    tiempo_objetivo_minutos = models.PositiveIntegerField(
+        default=15,
+        verbose_name="Tiempo Objetivo de Espera (minutos)"
+    )
+    descripcion_prioridad = models.CharField(
+        max_length=150,
+        blank=True,
+        default="",
+        verbose_name="Descripción de la Prioridad Clínica"
+    )
+    orden = models.PositiveSmallIntegerField(
+        default=1,
+        verbose_name="Orden de Visualización"
+    )
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        verbose_name="Última Modificación"
+    )
+
+    class Meta:
+        db_table = 'sgtp_configuracion_sla_triage'
+        verbose_name = 'Configuración de SLA de Triage'
+        verbose_name_plural = 'Configuraciones de SLA de Triage'
+        ordering = ['orden', 'id']
+
+    def __str__(self) -> str:
+        return f"SLA {self.clasificacion_triage}: {self.tiempo_objetivo_minutos} min"
+
+    @classmethod
+    def get_or_seed_defaults(cls):
+        """Asegura que existan las configuraciones por defecto y las retorna."""
+        for key, mins, desc, ord_num in cls.DEFAULT_CONFIGS:
+            cls.objects.get_or_create(
+                clasificacion_triage=key,
+                defaults={
+                    'tiempo_objetivo_minutos': mins,
+                    'descripcion_prioridad': desc,
+                    'orden': ord_num
+                }
+            )
+        return cls.objects.all().order_by('orden')
+
+    @classmethod
+    def get_objetivos_map(cls) -> dict[str, float]:
+        """Retorna un diccionario {clasificacion_triage: float(tiempo_objetivo_minutos)}."""
+        try:
+            cls.get_or_seed_defaults()
+            return {
+                obj.clasificacion_triage: float(obj.tiempo_objetivo_minutos)
+                for obj in cls.objects.all()
+            }
+        except Exception:
+            return {
+                k: float(m) for k, m, _, _ in cls.DEFAULT_CONFIGS
+            }
+
+
+auditlog.register(ConfiguracionSlaTriage)
+
 __all__ = [
     'EstadoTicket',
     'ClasificacionTriage',
@@ -216,4 +298,5 @@ __all__ = [
     'EstadoEstudio',
     'Ticket',
     'TicketEstudios',
+    'ConfiguracionSlaTriage',
 ]

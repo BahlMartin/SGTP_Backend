@@ -9,6 +9,7 @@ from app.models.ticket import (
     Ticket,
     TicketEstudios,
     ClasificacionTriage,
+    ConfiguracionSlaTriage,
 )
 from app.schemas.studies import EstudiosSerializer
 from app.schemas.patient import PacienteSerializer
@@ -264,10 +265,34 @@ class TicketHistorialDetailSerializer(TicketDetailSerializer):
 # Alias
 TicketSerializer = TicketDetailSerializer
 
+
+class ConfiguracionSlaTriageSerializer(serializers.ModelSerializer):
+    nombre_display = serializers.CharField(source='get_clasificacion_triage_display', read_only=True)
+
+    class Meta:
+        model = ConfiguracionSlaTriage
+        fields = [
+            'id',
+            'clasificacion_triage',
+            'nombre_display',
+            'tiempo_objetivo_minutos',
+            'descripcion_prioridad',
+            'orden',
+            'updated_at',
+        ]
+        read_only_fields = ['id', 'clasificacion_triage', 'nombre_display', 'updated_at']
+
+    def validate_tiempo_objetivo_minutos(self, value):
+        if value < 1 or value > 480:
+            raise serializers.ValidationError("El tiempo objetivo debe encontrarse entre 1 y 480 minutos (máximo 8 horas).")
+        return value
+
+
 __all__ = [
     'TicketEstudiosSerializer',
     'TicketCreateSerializer',
     'TicketDetailSerializer',
     'TicketHistorialDetailSerializer',
     'TicketSerializer',
+    'ConfiguracionSlaTriageSerializer',
 ]

@@ -301,12 +301,18 @@ class ReportExcelGenerator:
 
         filas_triage = []
         fila_inicio_sla = fila + 1
+        try:
+            from app.models.ticket import ConfiguracionSlaTriage
+            objetivos_dinamicos = ConfiguracionSlaTriage.get_objetivos_map()
+        except Exception:
+            objetivos_dinamicos = dict(OBJETIVOS_SLA_TRIAGE)
+
         for key_triage, label_triage in ETIQUETAS_TRIAGE.items():
             sla_item = sla_map.get(key_triage, {})
             cant_pac = int(sla_item.get('total_pacientes', dist_map.get(key_triage, 0)) or 0)
             pct_triage = round((cant_pac / total_emitidos) * 100, 1) if total_emitidos > 0 else 0.0
             esp_prom = float(sla_item.get('promedio_espera_minutos', 0.0) or 0.0)
-            obj_min = OBJETIVOS_SLA_TRIAGE.get(key_triage)
+            obj_min = objetivos_dinamicos.get(key_triage, OBJETIVOS_SLA_TRIAGE.get(key_triage))
             obj_txt = f"{int(obj_min)} min" if obj_min is not None else "Sin tope fijo"
 
             if cant_pac == 0 or esp_prom <= 0:

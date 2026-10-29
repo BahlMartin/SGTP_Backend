@@ -502,20 +502,27 @@ class ReportPdfGenerator:
             Paragraph("Estado", est['th']),
         ]]
         extra_sla: List[Tuple] = []
+        try:
+            from app.models.ticket import ConfiguracionSlaTriage
+            objetivos_dinamicos = ConfiguracionSlaTriage.get_objetivos_map()
+        except Exception:
+            objetivos_dinamicos = {}
+
         for k, lbl, _col, objetivo in TRIAGE_META:
+            objetivo_final = objetivos_dinamicos.get(k, objetivo)
             sla = sla_por_key.get(k)
-            if objetivo is None or not sla or not sla.get('total_pacientes'):
+            if objetivo_final is None or not sla or not sla.get('total_pacientes'):
                 continue
             espera = float(sla.get('promedio_espera_minutos', 0) or 0)
             if espera <= 0:
                 estado = Paragraph("<font color='#64748B'>Sin datos</font>", est['celda'])
-            elif espera > objetivo:
+            elif espera > objetivo_final:
                 estado = Paragraph("<font color='#B91C1C'><b>Excedido</b></font>", est['celda'])
             else:
                 estado = Paragraph("<font color='#0F766E'><b>Cumple</b></font>", est['celda'])
             datos.append([
                 Paragraph(_esc(lbl), est['celda']), Paragraph(_n(sla['total_pacientes']), est['celda_der']),
-                Paragraph(f"{_dec(espera)} min", est['celda_der']), Paragraph(f"{_dec(objetivo, 0)} min", est['celda_der']),
+                Paragraph(f"{_dec(espera)} min", est['celda_der']), Paragraph(f"{_dec(objetivo_final, 0)} min", est['celda_der']),
                 estado,
             ])
         if len(datos) == 1:

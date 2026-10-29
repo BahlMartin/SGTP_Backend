@@ -15,4 +15,5 @@ urlpatterns = [
     path('boxes/', include('app.api.endpoints.boxes')),
     path('reports/', include('app.api.endpoints.reports')),
     path('ocr/', include('app.api.endpoints.ocr')),
+    path('sla/', include('app.api.endpoints.sla')),
 ]

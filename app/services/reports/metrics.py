@@ -169,6 +169,9 @@ class ReportMetricsService:
         distribucion_triage = []
         sla_triage = []
 
+        from app.models.ticket import ConfiguracionSlaTriage
+        objetivos_sla_map = ConfiguracionSlaTriage.get_objetivos_map()
+
         for triage_key, triage_label in ClasificacionTriage.choices:
             cant = triage_counts.get(triage_key, 0)
             if cant > 0:
@@ -184,7 +187,8 @@ class ReportMetricsService:
                 'clasificacion_triage': triage_key,
                 'nombre_display': triage_label,
                 'total_pacientes': cant,
-                'promedio_espera_minutos': prom_cat
+                'promedio_espera_minutos': prom_cat,
+                'tiempo_objetivo_minutos': objetivos_sla_map.get(triage_key, 15),
             })
 
         distribucion_triage.sort(key=lambda x: x['cantidad'], reverse=True)
