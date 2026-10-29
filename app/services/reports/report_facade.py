@@ -63,19 +63,26 @@ class ReportFacade:
         """
         Orquesta el flujo completo:
         1. Valida destinatarios (si no hay, no envía y retorna None).
-        2. Consolida métricas asistenciales.
-        3. Compila el documento PDF oficial.
-        4. Despacha por correo SMTP al destinatario y registra auditoría.
+        2. Consolida métricas asistenciales (incluyendo detalle para Excel y rendimiento de personal).
+        3. Compila el documento PDF oficial y el libro Excel (.xlsx) multi-hoja.
+        4. Despacha por correo SMTP al destinatario con ambos adjuntos y registra auditoría.
         """
         if not destinatarios:
             return None
 
         metricas = cls.consolidar_metricas_diarias(
             fecha_consulta,
+            incluir_detalle_excel=True,
             incluir_rendimiento_personal=True
         )
         pdf_bytes = cls.generar_pdf_reporte(metricas)
-        return ReportEmailService.despachar(metricas, pdf_bytes, destinatarios=destinatarios)
+        excel_bytes = cls.generar_excel_reporte(metricas)
+        return ReportEmailService.despachar(
+            metricas,
+            pdf_bytes,
+            destinatarios=destinatarios,
+            excel_bytes=excel_bytes
+        )
 
 
 # Alias para compatibilidad de nomenclatura

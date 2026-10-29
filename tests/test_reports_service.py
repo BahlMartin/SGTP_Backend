@@ -280,8 +280,9 @@ class ReportsServiceTestCase(TestCase):
         email_enviado = mail.outbox[0]
         self.assertIn('Informe diario de actividad', email_enviado.subject)
         self.assertEqual([self.jefa.email], email_enviado.to)
-        self.assertEqual(len(email_enviado.attachments), 1)
+        self.assertEqual(len(email_enviado.attachments), 2)
         self.assertTrue(email_enviado.attachments[0][0].endswith('.pdf'))
+        self.assertTrue(email_enviado.attachments[1][0].endswith('.xlsx'))
 
     def test_despacho_sin_destinatarios_retorna_none(self):
         """Si no se especifican destinatarios, no debe despachar correo y retorna None."""

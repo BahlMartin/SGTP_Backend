@@ -136,7 +136,7 @@ def construir_contenido_correo(metricas: Dict[str, Any]) -> Dict[str, str]:
     <div style="font-size:20px;font-weight:700;margin-top:4px;">Informe diario · {escape(fecha_txt)}</div>
   </td></tr>
   <tr><td style="padding:20px 24px;font-size:13px;line-height:20px;color:#334155;">
-    Hola, te compartimos el resumen de la jornada. El informe completo está adjunto en PDF.
+    Hola, te compartimos el resumen de la jornada. El informe completo está adjunto en PDF y Excel (.xlsx).
     {kpis}
     <div style="font-size:13px;font-weight:700;color:#0f172a;margin:16px 0 4px;">Pacientes por triage</div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">{triage_html}</table>
@@ -144,7 +144,7 @@ def construir_contenido_correo(metricas: Dict[str, Any]) -> Dict[str, str]:
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">{secciones_html}</table>
     {alerta_html}
     <p style="margin:18px 0 0;background:#0f172a;color:#ffffff;padding:11px 16px;border-radius:8px;font-weight:700;font-size:13px;text-align:center;">
-      📎 Informe completo adjunto (PDF)
+      📎 Informe completo adjunto (PDF y Excel)
     </p>
   </td></tr>
   <tr><td bgcolor="#f8fafc" style="padding:14px 24px;border-top:1px solid #e2e8f0;color:#64748b;font-size:11px;line-height:16px;">
@@ -158,7 +158,7 @@ def construir_contenido_correo(metricas: Dict[str, Any]) -> Dict[str, str]:
     texto = (
         f"Hola,\n\n"
         f"Te compartimos el informe diario de actividad de {INSTITUCION} correspondiente al {fecha_txt}. "
-        f"El informe completo está adjunto en PDF.\n\n"
+        f"El informe completo está adjunto en PDF y Excel (.xlsx).\n\n"
         f"Resumen:\n"
         f"- Pacientes atendidos: {_n(metricas.get('total_atendidos', 0))} de {_n(metricas.get('total_emitidos', 0))} ingresos\n"
         f"- Estudios realizados: {_n(metricas.get('total_estudios', 0))}\n"
@@ -182,10 +182,11 @@ class ReportEmailService:
         cls,
         metricas: Dict[str, Any],
         pdf_bytes: bytes,
-        destinatarios: list[str] | None = None
+        destinatarios: list[str] | None = None,
+        excel_bytes: bytes | None = None
     ) -> HistorialReporteDiario | None:
         """
-        Envía por correo el PDF a los destinatarios especificados (usuario logeado)
+        Envía por correo el PDF y el Excel (.xlsx) a los destinatarios especificados
         y registra la auditoría. Si no se proveen destinatarios, no envía correo y retorna None.
         """
         if not destinatarios:
@@ -214,6 +215,12 @@ class ReportEmailService:
             )
             email.attach_alternative(contenido['html'], 'text/html')
             email.attach(f"Informe_Diario_SGTP_{fecha_str}.pdf", pdf_bytes, 'application/pdf')
+            if excel_bytes:
+                email.attach(
+                    f"Informe_Diario_SGTP_{fecha_str}.xlsx",
+                    excel_bytes,
+                    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
             email.send(fail_silently=False)
         except Exception as e:
             logger.error("Error al despachar el correo SMTP del reporte diario: %s", e)
