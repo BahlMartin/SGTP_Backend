@@ -65,6 +65,16 @@ class Paciente(SoftDeleteModel):
     def __str__(self) -> str:
         return f"Paciente DNI: {self.dni} - {self.apellidos}, {self.nombre} ({self.obra_social})"
 
+    @property
+    def apellido(self):
+        """Alias de compatibilidad para referencias en singular."""
+        return self.apellidos
+
+    @apellido.setter
+    def apellido(self, value):
+        self.apellidos = value
+
+
 
 # Registro de auditoría
 auditlog.register(Paciente)
