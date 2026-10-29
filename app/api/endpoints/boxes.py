@@ -311,7 +311,27 @@ class BoxViewSet(viewsets.ModelViewSet):
         if motivo_cierre != MotivoCierreBox.CANCELADO:
             notificar_actualizacion_estudios_laboratorio(ticket=getattr(asignacion, 'ticket', None))
 
-        es_cancelado = motivo_cierre == MotivoCierreBox.CANCELADO
+        es_cancelado = (motivo_cierre == MotivoCierreBox.CANCELADO)
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.ATENCION_CANCELADA if es_cancelado else AccionAuditoria.ATENCION_FINALIZADA,
+            usuario=request.user,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion=(
+                f"Atención en Box {box.numero} cancelada. Motivo: {observaciones_cierre or 'Cancelación en box'}"
+                if es_cancelado
+                else f"Atención finalizada satisfactoriamente en Box {box.numero}"
+            ),
+            entidad_tipo='Box',
+            entidad_id=box.id,
+            metadata={
+                'box': f'Box {box.numero}',
+                'ticket': getattr(asignacion.ticket, 'num_totem', '') if asignacion and asignacion.ticket else '',
+                'motivo_cierre': motivo_cierre,
+                'observaciones': observaciones_cierre
+            },
+            request=request
+        )
+
         mensaje_respuesta = (
             f"Turno cancelado por ausencia del paciente en Box {box.numero}. El box se encuentra disponible."
             if es_cancelado

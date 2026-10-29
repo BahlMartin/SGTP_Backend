@@ -263,3 +263,78 @@ class AuditoriaIntegrationTestCase(TestCase):
             grupos_llamados = [call[0][0] for call in mock_emitir.call_args_list]
             self.assertIn('sgtp_auditoria_admin', grupos_llamados)
             self.assertIn('sgtp_auditoria_jefa', grupos_llamados)
+
+
+    def test_resumen_kpis_claves_completas(self):
+        # Crear cancelacion y alerta
+        EventoAuditoria.objects.create(
+            usuario=self.box_user,
+            rol_usuario=RolPersonal.BOX,
+            accion=AccionAuditoria.ATENCION_CANCELADA,
+            descripcion='Atencion cancelada'
+        )
+        EventoAuditoria.objects.create(
+            usuario=self.admision_user,
+            rol_usuario=RolPersonal.ADMISION,
+            accion=AccionAuditoria.LOGIN_FALLIDO,
+            resultado=ResultadoAuditoria.FALLO,
+            descripcion='Login fallido',
+            alertas=[{'codigo': 'LOGIN_FALLIDO', 'severidad': 'ALTA', 'texto': 'Password incorrecto'}]
+        )
+
+        self.client.force_authenticate(user=self.admin_user)
+        res = self.client.get('/app/auditoria/resumen/')
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn('cancelaciones', data)
+        self.assertIn('alertas_activas', data)
+        self.assertIn('usuarios_activos_24h', data)
+        self.assertGreaterEqual(data['cancelaciones'], 1)
+        self.assertGreaterEqual(data['alertas_activas'], 1)
+        self.assertGreaterEqual(data['usuarios_activos_24h'], 1)
+        self.assertIn('alertas_recientes', data)
+        self.assertGreaterEqual(len(data['alertas_recientes']), 1)
+
+    def test_empleado_jornada_endpoint_estructura(self):
+        # Crear eventos en distintos horarios para simular jornada y gap
+        hoy = timezone.now()
+        hace_2_horas = hoy - timedelta(hours=2)
+        hace_1_hora = hoy - timedelta(hours=1)
+
+        EventoAuditoria.objects.create(
+            usuario=self.box_user,
+            rol_usuario=RolPersonal.BOX,
+            accion=AccionAuditoria.BOX_TOMADO,
+            descripcion='Toma de box',
+            fecha=hace_2_horas
+        )
+        EventoAuditoria.objects.create(
+            usuario=self.box_user,
+            rol_usuario=RolPersonal.BOX,
+            accion=AccionAuditoria.ATENCION_CANCELADA,
+            descripcion='Cancelacion de paciente',
+            fecha=hace_1_hora
+        )
+
+        self.client.force_authenticate(user=self.admin_user)
+        res = self.client.get(f'/app/auditoria/empleado/{self.box_user.pk}/')
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+
+        # Estructura de jornada
+        self.assertIn('empleado', data)
+        self.assertIn('resumen', data)
+        self.assertIn('turno_programado', data)
+        self.assertIn('bloques_actividad', data)
+        self.assertIn('timeline', data)
+
+        resumen = data['resumen']
+        self.assertEqual(resumen['total_eventos'], 2)
+        self.assertEqual(resumen['cancelaciones'], 1)
+
+        # Timeline debe contener gap y eventos con tipo y evento
+        timeline = data['timeline']
+        self.assertGreaterEqual(len(timeline), 2)
+        tipos = [item.get('tipo') for item in timeline]
+        self.assertIn('evento', tipos)
+        self.assertIn('gap', tipos)

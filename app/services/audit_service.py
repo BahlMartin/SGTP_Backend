@@ -9,6 +9,7 @@ import ipaddress
 from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime, timedelta
 from django.db import connection, transaction
+from django.db.models import Q
 from django.utils import timezone
 from django.conf import settings
 from django.core.exceptions import PermissionDenied
@@ -468,20 +469,71 @@ class AuditService:
         cancelaciones_hoy = qs_hoy.filter(accion=AccionAuditoria.ATENCION_CANCELADA).count()
         escaneos_ocr_hoy = qs_hoy.filter(accion__in=[AccionAuditoria.RECETA_ESCANEADA, AccionAuditoria.OCR_CORREGIDO]).count()
 
-        # Alertas activas en el período actual
-        alertas_activas = queryset.exclude(alertas=[]).count()
+        # Alertas en el conjunto actual (por campo alertas, fallo, bloqueo o fuera de turno)
+        qs_con_alertas = queryset.filter(
+            Q(resultado=ResultadoAuditoria.FALLO) |
+            Q(accion__in=[
+                AccionAuditoria.CUENTA_BLOQUEADA_AUTO,
+                AccionAuditoria.ACCESO_FUERA_DE_TURNO,
+                AccionAuditoria.DESBLOQUEO_EMERGENCIA
+            ]) |
+            (~Q(alertas=[]) & ~Q(alertas__isnull=True) & ~Q(alertas={}) & ~Q(alertas='[]'))
+        ).distinct()
+        alertas_activas = qs_con_alertas.count()
 
-        # Usuarios distintos activos hoy
-        usuarios_activos = qs_hoy.exclude(usuario=None).values_list('usuario_id', flat=True).distinct().count()
+        # Feed de alertas recientes para el banner superior
+        alertas_recientes = []
+        for ev in qs_con_alertas.select_related('usuario').order_by('-fecha')[:10]:
+            quien = f"{ev.usuario.nombre} {ev.usuario.apellidos}".strip() if ev.usuario else (ev.email_intentado or 'Desconocido')
+            if ev.alertas:
+                for al in ev.alertas:
+                    alertas_recientes.append({
+                        'evento_id': ev.id,
+                        'codigo': al.get('codigo', ev.accion),
+                        'severidad': al.get('severidad', 'ALTA' if ev.resultado == ResultadoAuditoria.FALLO else 'MEDIA'),
+                        'titulo': al.get('texto', ev.descripcion),
+                        'quien': quien,
+                        'hora': ev.fecha.strftime('%H:%M'),
+                        'ip': ev.ip
+                    })
+            else:
+                alertas_recientes.append({
+                    'evento_id': ev.id,
+                    'codigo': ev.accion,
+                    'severidad': 'ALTA' if ev.resultado == ResultadoAuditoria.FALLO else 'MEDIA',
+                    'titulo': ev.descripcion,
+                    'quien': quien,
+                    'hora': ev.fecha.strftime('%H:%M'),
+                    'ip': ev.ip
+                })
+
+        # Personal activo: usuarios con actividad en 24h o personal activo del hospital
+        hace_24h = timezone.now() - timedelta(hours=24)
+        usuarios_activos_24h = (
+            queryset.filter(fecha__gte=hace_24h)
+            .exclude(usuario=None)
+            .values_list('usuario_id', flat=True)
+            .distinct()
+            .count()
+        )
+        total_personal_activo = Personal.objects.filter(activo=True).count()
+        usuarios_activos = max(usuarios_activos_24h, total_personal_activo)
 
         return {
             'logins_hoy': total_logins_hoy,
             'fallidos_hoy': total_fallidos_hoy,
+            'fallidos_bloqueados': total_fallidos_hoy + cuentas_bloqueadas,
             'cuentas_bloqueadas_hoy': cuentas_bloqueadas,
+            'cancelaciones': cancelaciones_hoy,
             'cancelaciones_hoy': cancelaciones_hoy,
+            'escaneos_ocr': escaneos_ocr_hoy,
             'escaneos_ocr_hoy': escaneos_ocr_hoy,
+            'alertas_activas': alertas_activas,
             'alertas_periodo': alertas_activas,
+            'usuarios_activos_24h': usuarios_activos,
             'usuarios_activos_hoy': usuarios_activos,
+            'usuarios_activos': usuarios_activos,
+            'alertas_recientes': alertas_recientes[:8]
         }
 
     @classmethod

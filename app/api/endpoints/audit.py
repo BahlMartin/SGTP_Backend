@@ -78,7 +78,15 @@ def aplicar_filtros_auditoria(qs, params):
 
     solo_alertas = str(params.get('solo_alertas', '')).lower() in ['true', '1', 'yes']
     if solo_alertas:
-        qs = qs.exclude(alertas=[])
+        qs = qs.filter(
+            Q(resultado=ResultadoAuditoria.FALLO) |
+            Q(accion__in=[
+                AccionAuditoria.CUENTA_BLOQUEADA_AUTO,
+                AccionAuditoria.ACCESO_FUERA_DE_TURNO,
+                AccionAuditoria.DESBLOQUEO_EMERGENCIA
+            ]) |
+            (~Q(alertas=[]) & ~Q(alertas__isnull=True) & ~Q(alertas={}) & ~Q(alertas='[]'))
+        ).distinct()
 
     usuario_id = params.get('usuario')
     if usuario_id:
@@ -358,55 +366,92 @@ class EmpleadoJornadaView(APIView):
             if bloque_actual_inicio is not None:
                 bloques.append({'inicio': bloque_actual_inicio, 'fin': bloque_actual_fin, 'tipo': tipo_actual})
 
-        # Construcción de la línea de tiempo con gaps y grupos
+        # Construcción de la línea de tiempo con gaps y eventos detallados
         timeline = []
         for i, ev in enumerate(eventos_dia):
             # Detectar gap > 30 minutos con respecto al evento previo
             if i > 0:
                 diff_min = int((ev.fecha - eventos_dia[i - 1].fecha).total_seconds() / 60)
                 if diff_min >= 30:
+                    desde_str = eventos_dia[i - 1].fecha.strftime('%H:%M')
+                    hasta_str = ev.fecha.strftime('%H:%M')
                     timeline.append({
                         'id': f'gap-{i}',
+                        'tipo': 'gap',
                         'tipoGap': True,
                         'minutos': diff_min,
-                        'rango': f"{eventos_dia[i-1].fecha.strftime('%H:%M')} – {ev.fecha.strftime('%H:%M')}"
+                        'duracion_min': diff_min,
+                        'desde': desde_str,
+                        'hasta': hasta_str,
+                        'rango': f"{desde_str} – {hasta_str}"
                     })
 
             alerta_texto = None
             if ev.alertas:
                 alerta_texto = ev.alertas[0].get('texto', 'Alerta registrada')
+            elif ev.resultado == ResultadoAuditoria.FALLO:
+                alerta_texto = 'Operación fallida'
 
             timeline.append({
                 'id': f'ev-{ev.id}',
                 'eventId': ev.id,
+                'tipo': 'evento',
                 'hora': ev.fecha.strftime('%H:%M'),
                 'categoria': ev.categoria,
+                'accion': ev.accion,
                 'titulo': ev.descripcion,
+                'descripcion': ev.descripcion,
                 'detalle': ", ".join([f"{k}: {v}" for k, v in (ev.metadata or {}).items() if k != 'triage_color']) or '',
                 'resultado': ev.resultado,
                 'alerta': alerta_texto,
+                'evento': {
+                    'id': ev.id,
+                    'fecha': ev.fecha.isoformat(),
+                    'hora': ev.fecha.strftime('%H:%M'),
+                    'categoria': ev.categoria,
+                    'accion': ev.accion,
+                    'resultado': ev.resultado,
+                    'descripcion': ev.descripcion,
+                    'alertas': ev.alertas or []
+                },
                 'triageColor': ev.metadata.get('triage_color') if isinstance(ev.metadata, dict) else None,
-                'destacado': ev.accion in [AccionAuditoria.ATENCION_CANCELADA, AccionAuditoria.CUENTA_BLOQUEADA_AUTO, AccionAuditoria.DESBLOQUEO_EMERGENCIA]
+                'destacado': ev.accion in [
+                    AccionAuditoria.ATENCION_CANCELADA,
+                    AccionAuditoria.CUENTA_BLOQUEADA_AUTO,
+                    AccionAuditoria.DESBLOQUEO_EMERGENCIA
+                ] or ev.resultado == ResultadoAuditoria.FALLO
             })
 
         return Response({
             'empleado': {
                 'id': empleado.pk,
-                'nombre': f"{empleado.nombre} {empleado.apellidos}",
+                'nombre': f"{empleado.nombre} {empleado.apellidos}".strip(),
                 'rol': empleado.rol,
                 'email': empleado.email,
                 'matricula': empleado.matricula or '',
                 'turnoLabel': turno_label,
+                'turno_label': turno_label,
                 'turnoInicio': inicio_turno_hora,
                 'turnoFin': fin_turno_hora,
             },
+            'turno_programado': {
+                'inicio': inicio_turno_hora,
+                'fin': fin_turno_hora,
+                'label': turno_label
+            },
             'resumen': {
+                'total_eventos': total_eventos,
                 'totalEventos': total_eventos,
+                'primera_act': primera_act,
                 'primeraAct': primera_act,
+                'ultima_act': ultima_act,
                 'ultimaAct': ultima_act,
                 'cancelaciones': cancelaciones,
                 'alertas': alertas,
+                'turno_label': turno_label,
+                'turnoLabel': turno_label
             },
+            'bloques_actividad': bloques,
             'bloquesActividad': bloques,
             'timeline': timeline,
         }, status=status.HTTP_200_OK)
