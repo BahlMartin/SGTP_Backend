@@ -1,26 +1,35 @@
+import logging
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
+
+logger = logging.getLogger(__name__)
+
 
 def emitir_evento_ws(grupo: str, evento_tipo: str, datos: dict):
     """
     Función helper para enviar eventos a WebSockets desde cualquier parte de Django.
     Estandariza el payload con 'event' y 'action' para máxima compatibilidad con el frontend.
     """
-    channel_layer = get_channel_layer()
-    async_to_sync(channel_layer.group_send)(
-        grupo,
-        {
-            'type': 'broadcast_event', # Llama al método de BaseHospitalConsumer
-            'payload': {
-                'event': evento_tipo,
-                'action': evento_tipo,
-                'data': datos
+    try:
+        channel_layer = get_channel_layer()
+        if not channel_layer:
+            return
+        async_to_sync(channel_layer.group_send)(
+            grupo,
+            {
+                'type': 'broadcast_event',  # Llama al método de BaseHospitalConsumer
+                'payload': {
+                    'event': evento_tipo,
+                    'action': evento_tipo,
+                    'data': datos
+                }
             }
-        }
-    )
+        )
+    except Exception as exc:
+        logger.warning("No se pudo emitir evento WS '%s' al grupo '%s': %s", evento_tipo, grupo, exc)
 
 
-# --- EJEMPLOS DE USO ---
+# --- NOTIFICADORES DE EVENTOS ---
 
 def notificar_ticket_ingresado(ticket):
     paciente_str = f"{ticket.paciente.nombre} {ticket.paciente.apellidos}".strip() if ticket.paciente else ""
@@ -32,10 +41,12 @@ def notificar_ticket_ingresado(ticket):
         'hora_ingreso': ticket.fecha_hora_admision.isoformat() if ticket.fecha_hora_admision else None
     })
 
+
 def notificar_actualizacion_cola(lista_cola):
     emitir_evento_ws('sgtp_queue_live', 'QUEUE_UPDATED', {
         'tickets_en_espera': lista_cola
     })
+
 
 def notificar_box_en_atencion(box):
     emitir_evento_ws('sgtp_boxes_live', 'BOX_ATTENDING', {
@@ -45,6 +56,7 @@ def notificar_box_en_atencion(box):
         'ticket_actual': box.ticket_actual_id
     })
 
+
 def notificar_laboratorio_listo(estudio):
     emitir_evento_ws('sgtp_lab_live', 'LAB_RESULT_READY', {
         'paciente_id': estudio.paciente_id,
@@ -53,6 +65,7 @@ def notificar_laboratorio_listo(estudio):
         'url_resultado': estudio.url_pdf
     })
 
+
 def notificar_estudios_actualizados(ticket=None):
     payload = {
         'ticket_id': str(ticket.id_ticket) if ticket and hasattr(ticket, 'id_ticket') else None
@@ -60,6 +73,24 @@ def notificar_estudios_actualizados(ticket=None):
     emitir_evento_ws('sgtp_lab_live', 'LAB_STUDIES_UPDATED', payload)
     emitir_evento_ws('sgtp_monitor_operativo', 'LAB_STUDIES_UPDATED', payload)
 
+
 def notificar_metrica_reporte(metricas):
     # Ideal para llamar desde tus tareas de Celery o cuando cambia una métrica clave
     emitir_evento_ws('sgtp_reports_live', 'REALTIME_METRICS_UPDATED', metricas)
+
+
+def notificar_cambio_estado_personal(personal=None, accion: str = 'UPDATED'):
+    """
+    Notifica en tiempo real a los paneles de Jefatura (sgtp_monitor_operativo)
+    y Secretaría (sgtp_reports_live) cualquier cambio de bloqueo, desbloqueo,
+    intentos fallidos o estado de una cuenta de personal.
+    """
+    payload = {
+        'id_personal': getattr(personal, 'id_personal', None),
+        'email': getattr(personal, 'email', None),
+        'activo': getattr(personal, 'activo', None),
+        'cant_intentos': getattr(personal, 'cant_intentos', None),
+        'accion': accion,
+    }
+    emitir_evento_ws('sgtp_monitor_operativo', 'STAFF_UPDATED', payload)
+    emitir_evento_ws('sgtp_reports_live', 'STAFF_UPDATED', payload)

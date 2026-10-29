@@ -12,6 +12,7 @@ from rest_framework.routers import DefaultRouter
 from app.models.user import Personal, HabilitacionHoraria, PlanificacionHorasExtras
 from app.schemas.user import PersonalSerializer, HabilitacionHorariaSerializer, PlanificacionHorasExtrasSerializer
 from app.services.auth_service import AuthenticationService
+from app.services.websocket_notifier import notificar_cambio_estado_personal
 from app.core.permissions import JerarquiaCreacionPersonalPermission, IsJefaRole
 
 from rest_framework.permissions import IsAuthenticated
@@ -57,15 +58,21 @@ class PersonalViewSet(viewsets.ModelViewSet):
             creador=self.request.user
         )
 
+    def perform_update(self, serializer: PersonalSerializer) -> None:
+        instance = serializer.save()
+        notificar_cambio_estado_personal(instance, accion='ACTUALIZADO')
+
     def perform_destroy(self, instance: Personal) -> None:
         """Aplica borrado lógico (Soft-Delete) desactivando la cuenta del personal."""
         instance.delete()
+        notificar_cambio_estado_personal(instance, accion='ELIMINADO')
 
     @action(detail=True, methods=['patch'], url_path='reactivar')
     def reactivar(self, request, pk=None) -> Response:
         """Endpoint para reactivar una cuenta de personal previamente desactivada."""
         instance = self.get_object()
         instance.restore()
+        notificar_cambio_estado_personal(instance, accion='REACTIVADO')
         serializer = self.get_serializer(instance)
         return Response(
             {
@@ -158,6 +165,7 @@ class HabilitacionHorariaViewSet(viewsets.ModelViewSet):
                 hab2.clean()
                 hab2.save()
 
+            notificar_cambio_estado_personal(accion='HABILITACION_HORARIA_CREADA')
             serializer1 = self.get_serializer(hab1)
             serializer2 = self.get_serializer(hab2)
             return Response(
@@ -171,17 +179,20 @@ class HabilitacionHorariaViewSet(viewsets.ModelViewSet):
         return super().create(request, *args, **kwargs)
 
     def perform_create(self, serializer: HabilitacionHorariaSerializer) -> None:
-        serializer.save(aprobado_por=self.request.user)
+        inst = serializer.save(aprobado_por=self.request.user)
+        notificar_cambio_estado_personal(inst.personal, accion='HABILITACION_HORARIA_CREADA')
 
     def perform_destroy(self, instance: HabilitacionHoraria) -> None:
         """Aplica borrado lógico (Soft-Delete) desactivando la habilitación horaria."""
         instance.delete()
+        notificar_cambio_estado_personal(instance.personal, accion='HABILITACION_HORARIA_REVOCADA')
 
     @action(detail=True, methods=['patch'], url_path='reactivar')
     def reactivar(self, request, pk=None) -> Response:
         """Endpoint para reactivar una habilitación horaria previamente revocada."""
         instance = self.get_object()
         instance.restore()
+        notificar_cambio_estado_personal(instance.personal, accion='HABILITACION_HORARIA_REACTIVADA')
         serializer = self.get_serializer(instance)
         return Response(
             {
@@ -292,6 +303,7 @@ class HabilitacionHorariaViewSet(viewsets.ModelViewSet):
                 plan.total_horas_mensual = round(total_horas, 2)
                 plan.save(update_fields=['total_horas_mensual'])
 
+        notificar_cambio_estado_personal(accion='HABILITACION_HORARIA_REVOCADA_LOTE')
         return Response(
             {
                 "detail": f"Se revocaron exitosamente {count} autorizaciones de horas extras.",
@@ -331,7 +343,8 @@ class PlanificacionHorasExtrasViewSet(viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer: PlanificacionHorasExtrasSerializer) -> None:
-        serializer.save(aprobado_por=self.request.user)
+        inst = serializer.save(aprobado_por=self.request.user)
+        notificar_cambio_estado_personal(inst.personal, accion='PLANIFICACION_CREADA')
 
 
 app_name = 'users_endpoints'

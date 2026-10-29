@@ -6,6 +6,7 @@ from typing import Optional, Dict, Any, Tuple
 from django.conf import settings
 from django.core.exceptions import ValidationError, PermissionDenied
 from app.models.user import Personal, RolPersonal, HabilitacionHoraria
+from app.services.websocket_notifier import notificar_cambio_estado_personal
 
 
 class AuthenticationService:
@@ -39,6 +40,10 @@ class AuthenticationService:
         # Validación de contraseña
         if not user.check_password(password):
             bloqueado = user.registrar_intento_fallido()
+            notificar_cambio_estado_personal(
+                user,
+                accion='BLOQUEO_AUTOMATICO' if bloqueado else 'INTENTO_FALLIDO'
+            )
             if bloqueado:
                 return None, (
                     "Ha alcanzado 3 intentos fallidos consecutivos de inicio de sesión. "
@@ -48,7 +53,10 @@ class AuthenticationService:
             return None, f"Contraseña incorrecta. Le restan {intentos_restantes} intento(s) antes del bloqueo de la cuenta."
 
         # Login exitoso: restablecer contador de intentos fallidos
+        tenia_intentos_previos = (user.cant_intentos or 0) > 0
         user.resetear_intentos()
+        if tenia_intentos_previos:
+            notificar_cambio_estado_personal(user, accion='INTENTOS_RESETEADOS')
         return user, None
 
     @classmethod
@@ -69,6 +77,7 @@ class AuthenticationService:
             raise ValidationError(f"Personal con ID {id_personal} no encontrado.")
 
         personal.desbloquear()
+        notificar_cambio_estado_personal(personal, accion='DESBLOQUEADO')
         return personal
 
     @classmethod
@@ -96,6 +105,7 @@ class AuthenticationService:
             raise PermissionDenied("Restricción RBAC: La Jefa no tiene permisos para bloquear cuentas de Administrador o Jefatura.")
 
         personal.bloquear()
+        notificar_cambio_estado_personal(personal, accion='BLOQUEADO')
         return personal
 
     @classmethod
@@ -129,6 +139,7 @@ class AuthenticationService:
             )
 
         personal.desbloquear()
+        notificar_cambio_estado_personal(personal, accion='DESBLOQUEO_EMERGENCIA')
         return personal
 
     @classmethod
@@ -171,6 +182,7 @@ class AuthenticationService:
             for d in set(dias_laborales):
                 DiaLaboralPersonal.objects.create(personal=user, dia_semana=d)
 
+        notificar_cambio_estado_personal(user, accion='CREADO')
         return user
 
 
