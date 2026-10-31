@@ -299,8 +299,20 @@ class ReportPdfGenerator:
     @classmethod
     def _kpis(cls, m: Dict[str, Any], est: Dict[str, ParagraphStyle]) -> Table:
         emitidos = m.get('total_emitidos', 0)
+        total_canc = m.get('total_cancelados', 0)
+        canc_adm = m.get('total_cancelados_admision', 0)
+        canc_box = m.get('total_cancelados_box', 0)
+        if canc_adm > 0 and canc_box > 0:
+            txt_canc = f"{_n(total_canc)} aus. ({_n(canc_adm)} adm / {_n(canc_box)} box)"
+        elif canc_adm > 0:
+            txt_canc = f"{_n(total_canc)} aus. ({_n(canc_adm)} adm)"
+        elif canc_box > 0:
+            txt_canc = f"{_n(total_canc)} aus. ({_n(canc_box)} box)"
+        else:
+            txt_canc = f"{_n(total_canc)} ausentes"
+
         sub_atendidos = (
-            f"{_n(emitidos)} ingresos · {_n(m.get('total_cancelados', 0))} ausentes · "
+            f"{_n(emitidos)} ing. · {txt_canc} · "
             f"{_n(m.get('total_en_curso', 0))} en curso"
         )
         tarjetas = [
@@ -580,7 +592,25 @@ class ReportPdfGenerator:
              Paragraph(f"<b>{_dec(auditoria.get('tasa_rectificacion_porcentaje', 0))}%</b>", est['celda_der'])],
         ]
         el.append(cls._tabla(datos, [130, 131, 131, 131]))
-        el.append(Spacer(1, 14))
+        el.append(Spacer(1, 10))
+
+        total_canc_adm = metricas.get('total_cancelados_admision', auditoria.get('total_cancelados_admision', 0))
+        total_canc_box = metricas.get('total_cancelados_box', auditoria.get('total_cancelados_box', 0))
+        total_canc = metricas.get('total_cancelados', 0)
+        tasa_deserc = metricas.get('tasa_desercion_porcentaje', 0.0)
+
+        el.append(cls._seccion("Auditoría de cancelaciones y ausencias", est))
+        el.append(Spacer(1, 6))
+        datos_canc = [
+            [Paragraph("Cancelados en admisión", est['th_der']), Paragraph("Cancelados en box", est['th_der']),
+             Paragraph("Total ausentes / deserciones", est['th_der']), Paragraph("Tasa de deserción global", est['th_der'])],
+            [Paragraph(_n(total_canc_adm), est['celda_der']),
+             Paragraph(_n(total_canc_box), est['celda_der']),
+             Paragraph(f"<font color='#B91C1C'><b>{_n(total_canc)}</b></font>", est['celda_der']),
+             Paragraph(f"<b>{_dec(tasa_deserc)}%</b>", est['celda_der'])],
+        ]
+        el.append(cls._tabla(datos_canc, [130, 131, 131, 131]))
+        el.append(Spacer(1, 12))
 
         nota_anexo = Table([[Paragraph(
             "Las páginas siguientes (anexo) incluyen el resumen por sección, insumos, el detalle de prácticas "

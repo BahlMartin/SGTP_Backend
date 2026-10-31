@@ -9,6 +9,7 @@ from django.db.models import Count, Q
 
 from app.models.box import AsignacionesBox, MotivoCierreBox
 from app.models.shifts import HabilitacionHoraria
+from app.models.reception import TurnoRecepcion, EstadoTurnoRecepcion, CategoriaTurnoRecepcion
 from app.models.ticket import (
     Ticket,
     TicketEstudios,
@@ -29,6 +30,21 @@ MAPA_TUBOS_DISPLAY: Dict[str, str] = {
     TipoMuestra.MATERIA_FECAL: 'Frasco Materia Fecal',
     TipoMuestra.JERINGA: 'Jeringa Heparinizada (Gases en Sangre)',
     TipoMuestra.OTRO: 'Otros Tipos de Muestra Especial',
+}
+
+# Mapeo de prefijo de TurnoRecepcion a ClasificacionTriage
+MAPEO_PREFIJO_A_TRIAGE: Dict[str, str] = {
+    CategoriaTurnoRecepcion.GUARDIA: ClasificacionTriage.GUARDIA,
+    CategoriaTurnoRecepcion.MEDICOS: ClasificacionTriage.MEDICOS,
+    CategoriaTurnoRecepcion.EXTRACCION: ClasificacionTriage.EXTRACCION_SIN_TURNO,
+    CategoriaTurnoRecepcion.CONSULTA: ClasificacionTriage.OTRO,
+}
+
+MAPA_PREFIJO_LABEL: Dict[str, str] = {
+    CategoriaTurnoRecepcion.GUARDIA: 'Guardia',
+    CategoriaTurnoRecepcion.MEDICOS: 'Médicos',
+    CategoriaTurnoRecepcion.EXTRACCION: 'Extracción',
+    CategoriaTurnoRecepcion.CONSULTA: 'Consulta',
 }
 
 # Configuración de Franjas Horarias Hospitalarias
@@ -67,7 +83,7 @@ class ReportMetricsService:
         cls,
         fecha_consulta: Optional[date] = None,
         incluir_detalle_excel: bool = False,
-        incluir_rendimiento_personal: bool = False,
+        incluir_rendimiento_personal: bool = True,
         fecha_hasta: Optional[date] = None
     ) -> Dict[str, Any]:
         """
@@ -91,19 +107,33 @@ class ReportMetricsService:
         fin_dia = timezone.make_aware(datetime.combine(fecha_fin, time.max))
 
         # ==============================================================================
-        # 1. RESUMEN GLOBAL DE TICKETS
+        # 1. RESUMEN GLOBAL DE TICKETS Y TURNOS DE RECEPCIÓN
         # ==============================================================================
         tickets_dia = Ticket.objects.filter(
             fecha_hora_admision__range=(inicio_dia, fin_dia),
             is_deleted=False
         )
-        total_emitidos = tickets_dia.count()
+        turnos_recepcion_dia = TurnoRecepcion.objects.filter(
+            created_at__range=(inicio_dia, fin_dia)
+        )
+        turnos_cancelados_admision_qs = turnos_recepcion_dia.filter(
+            estado=EstadoTurnoRecepcion.CANCELADO
+        )
+        turnos_en_espera_admision_qs = turnos_recepcion_dia.filter(
+            estado__in=[EstadoTurnoRecepcion.PENDIENTE, EstadoTurnoRecepcion.EN_ATENCION]
+        )
+
+        total_cancelados_admision = turnos_cancelados_admision_qs.count()
+        total_cancelados_box = tickets_dia.filter(estado=EstadoTicket.CANCELADO).count()
+        total_cancelados = total_cancelados_admision + total_cancelados_box
+
         total_atendidos = tickets_dia.filter(estado=EstadoTicket.FINALIZADO).count()
         total_criticos_atendidos = tickets_dia.filter(
             estado=EstadoTicket.FINALIZADO,
             clasificacion_triage__in=[ClasificacionTriage.GUARDIA, ClasificacionTriage.MEDICOS]
         ).count()
-        total_cancelados = tickets_dia.filter(estado=EstadoTicket.CANCELADO).count()
+        # Suma de pacientes admitidos (tickets) + cancelados en admisión previa emisión de ticket + en espera de admisión
+        total_emitidos = tickets_dia.count() + total_cancelados_admision + turnos_en_espera_admision_qs.count()
         total_en_curso = max(0, total_emitidos - total_atendidos - total_cancelados)
 
         tasa_completitud = (
@@ -165,6 +195,10 @@ class ReportMetricsService:
             .annotate(cantidad=Count('pk'))
             .values_list('clasificacion_triage', 'cantidad')
         )
+        # Sumar los turnos de recepción cancelados en admisión según su categoría del tótem
+        for turno in turnos_cancelados_admision_qs:
+            cat_triage = MAPEO_PREFIJO_A_TRIAGE.get(turno.prefijo, ClasificacionTriage.OTRO)
+            triage_counts[cat_triage] = triage_counts.get(cat_triage, 0) + 1
         mapa_triage_display = dict(ClasificacionTriage.choices)
         distribucion_triage = []
         sla_triage = []
@@ -203,15 +237,29 @@ class ReportMetricsService:
                 slot_fin = timezone.make_aware(datetime.combine(fecha_inicio, cfg['hora_fin']))
 
                 tickets_slot = tickets_dia.filter(fecha_hora_admision__range=(slot_inicio, slot_fin))
-                emitidos_slot = tickets_slot.count()
-                atendidos_slot = tickets_slot.filter(estado=EstadoTicket.FINALIZADO).count()
-                cancelados_slot = tickets_slot.filter(estado=EstadoTicket.CANCELADO).count()
+                turnos_slot_canc = turnos_cancelados_admision_qs.filter(created_at__range=(slot_inicio, slot_fin))
+                turnos_slot_esp = turnos_en_espera_admision_qs.filter(created_at__range=(slot_inicio, slot_fin))
 
-                triage_slot = list(
+                canc_adm_slot = turnos_slot_canc.count()
+                canc_box_slot = tickets_slot.filter(estado=EstadoTicket.CANCELADO).count()
+
+                emitidos_slot = tickets_slot.count() + canc_adm_slot + turnos_slot_esp.count()
+                atendidos_slot = tickets_slot.filter(estado=EstadoTicket.FINALIZADO).count()
+                cancelados_slot = canc_adm_slot + canc_box_slot
+
+                triage_slot_dict = dict(
                     tickets_slot.values('clasificacion_triage')
                     .annotate(cantidad=Count('pk'))
-                    .order_by('-cantidad')
+                    .values_list('clasificacion_triage', 'cantidad')
                 )
+                for t_c in turnos_slot_canc:
+                    cat_tr = MAPEO_PREFIJO_A_TRIAGE.get(t_c.prefijo, ClasificacionTriage.OTRO)
+                    triage_slot_dict[cat_tr] = triage_slot_dict.get(cat_tr, 0) + 1
+
+                triage_slot = [
+                    {'clasificacion_triage': k, 'cantidad': v}
+                    for k, v in sorted(triage_slot_dict.items(), key=lambda x: x[1], reverse=True)
+                ]
 
                 asig_slot = asignaciones_dia.filter(fecha_hora_inicio__range=(slot_inicio, slot_fin))
                 esperas_slot = []
@@ -237,6 +285,8 @@ class ReportMetricsService:
                     'total_emitidos': emitidos_slot,
                     'total_atendidos': atendidos_slot,
                     'total_cancelados': cancelados_slot,
+                    'total_cancelados_admision': canc_adm_slot,
+                    'total_cancelados_box': canc_box_slot,
                     'promedio_espera_minutos': prom_esp_slot,
                     'promedio_atencion_minutos': prom_atn_slot,
                     'distribucion_triage': triage_slot,
@@ -244,6 +294,12 @@ class ReportMetricsService:
         else:
             tickets_periodo_list = list(
                 tickets_dia.values('fecha_hora_admision', 'estado', 'clasificacion_triage')
+            )
+            turnos_canc_periodo_list = list(
+                turnos_cancelados_admision_qs.values('created_at', 'prefijo')
+            )
+            turnos_esp_periodo_list = list(
+                turnos_en_espera_admision_qs.values('created_at')
             )
             asignaciones_periodo_list = list(asignaciones_dia)
 
@@ -256,14 +312,32 @@ class ReportMetricsService:
                     if t['fecha_hora_admision']
                     and h_ini <= timezone.localtime(t['fecha_hora_admision']).time() <= h_fin
                 ]
-                emitidos_slot = len(t_en_franja)
+                tc_en_franja = [
+                    tc for tc in turnos_canc_periodo_list
+                    if tc['created_at']
+                    and h_ini <= timezone.localtime(tc['created_at']).time() <= h_fin
+                ]
+                te_en_franja = [
+                    te for te in turnos_esp_periodo_list
+                    if te['created_at']
+                    and h_ini <= timezone.localtime(te['created_at']).time() <= h_fin
+                ]
+
+                canc_adm_slot = len(tc_en_franja)
+                canc_box_slot = sum(1 for t in t_en_franja if t['estado'] == EstadoTicket.CANCELADO)
+
+                emitidos_slot = len(t_en_franja) + canc_adm_slot + len(te_en_franja)
                 atendidos_slot = sum(1 for t in t_en_franja if t['estado'] == EstadoTicket.FINALIZADO)
-                cancelados_slot = sum(1 for t in t_en_franja if t['estado'] == EstadoTicket.CANCELADO)
+                cancelados_slot = canc_adm_slot + canc_box_slot
 
                 conteo_triage_slot: Dict[str, int] = {}
                 for t in t_en_franja:
                     ct = t['clasificacion_triage']
                     conteo_triage_slot[ct] = conteo_triage_slot.get(ct, 0) + 1
+                for tc in tc_en_franja:
+                    ct = MAPEO_PREFIJO_A_TRIAGE.get(tc['prefijo'], ClasificacionTriage.OTRO)
+                    conteo_triage_slot[ct] = conteo_triage_slot.get(ct, 0) + 1
+
                 triage_slot = [
                     {'clasificacion_triage': k, 'cantidad': v}
                     for k, v in sorted(conteo_triage_slot.items(), key=lambda x: x[1], reverse=True)
@@ -296,6 +370,8 @@ class ReportMetricsService:
                     'total_emitidos': emitidos_slot,
                     'total_atendidos': atendidos_slot,
                     'total_cancelados': cancelados_slot,
+                    'total_cancelados_admision': canc_adm_slot,
+                    'total_cancelados_box': canc_box_slot,
                     'promedio_espera_minutos': prom_esp_slot,
                     'promedio_atencion_minutos': prom_atn_slot,
                     'distribucion_triage': triage_slot,
@@ -408,12 +484,23 @@ class ReportMetricsService:
             .order_by('-cantidad')
         )
 
+        motivos_cancelacion_admision = list(
+            turnos_cancelados_admision_qs
+            .exclude(motivo_cancelacion__isnull=True)
+            .exclude(motivo_cancelacion__exact='')
+            .values('motivo_cancelacion')
+            .annotate(cantidad=Count('id'))
+            .order_by('-cantidad')
+        )
+
         auditoria_box: Dict[str, Any] = {
             'total_cargados_admision': total_cargados_admision,
             'total_agregados_box': total_agregados_box,
             'total_cancelados_box': total_cancelados_box,
+            'total_cancelados_admision': total_cancelados_admision,
             'tasa_rectificacion_porcentaje': tasa_rectificacion,
             'motivos_cancelacion': motivos_cancelacion,
+            'motivos_cancelacion_admision': motivos_cancelacion_admision,
         }
 
         # ==============================================================================
@@ -440,6 +527,8 @@ class ReportMetricsService:
             'total_atendidos': total_atendidos,
             'total_criticos_atendidos': total_criticos_atendidos,
             'total_cancelados': total_cancelados,
+            'total_cancelados_admision': total_cancelados_admision,
+            'total_cancelados_box': total_cancelados_box,
             'total_en_curso': total_en_curso,
             'tasa_completitud_porcentaje': tasa_completitud,
             'tasa_desercion_porcentaje': tasa_desercion,
@@ -546,7 +635,7 @@ class ReportMetricsService:
         for t in tickets_completos:
             h = timezone.localtime(t.fecha_hora_admision).hour if t.fecha_hora_admision else 0
             if h not in conteo_horas:
-                conteo_horas[h] = {'emitidos': 0, 'atendidos': 0, 'cancelados': 0, 'criticos': 0}
+                conteo_horas[h] = {'emitidos': 0, 'atendidos': 0, 'cancelados': 0, 'criticos': 0, 'cancelados_admision': 0, 'cancelados_box': 0}
             conteo_horas[h]['emitidos'] += 1
             if t.estado == EstadoTicket.FINALIZADO:
                 conteo_horas[h]['atendidos'] += 1
@@ -554,6 +643,17 @@ class ReportMetricsService:
                     conteo_horas[h]['criticos'] += 1
             elif t.estado == EstadoTicket.CANCELADO:
                 conteo_horas[h]['cancelados'] += 1
+                conteo_horas[h]['cancelados_box'] = conteo_horas[h].get('cancelados_box', 0) + 1
+
+        for tc in turnos_cancelados_admision_qs:
+            h = timezone.localtime(tc.created_at).hour if tc.created_at else 0
+            if h not in conteo_horas:
+                conteo_horas[h] = {'emitidos': 0, 'atendidos': 0, 'cancelados': 0, 'criticos': 0, 'cancelados_admision': 0, 'cancelados_box': 0}
+            conteo_horas[h]['emitidos'] += 1
+            conteo_horas[h]['cancelados'] += 1
+            conteo_horas[h]['cancelados_admision'] = conteo_horas[h].get('cancelados_admision', 0) + 1
+            if tc.prefijo in (CategoriaTurnoRecepcion.GUARDIA, CategoriaTurnoRecepcion.MEDICOS):
+                conteo_horas[h]['criticos'] += 1
 
         demanda_por_hora = [
             {
@@ -562,6 +662,8 @@ class ReportMetricsService:
                 'total_emitidos': datos_h['emitidos'],
                 'total_atendidos': datos_h['atendidos'],
                 'total_cancelados': datos_h['cancelados'],
+                'total_cancelados_admision': datos_h.get('cancelados_admision', 0),
+                'total_cancelados_box': datos_h.get('cancelados_box', 0),
                 'total_criticos': datos_h['criticos'],
                 'porcentaje_dia': round((datos_h['emitidos'] / total_emitidos) * 100, 1) if total_emitidos > 0 else 0.0,
             }
@@ -666,9 +768,24 @@ class ReportMetricsService:
                     'estado': t.estado,
                 })
 
+        detalle_cancelados_admision = []
+        for tc in turnos_cancelados_admision_qs.order_by('created_at'):
+            hora_creacion_txt = timezone.localtime(tc.created_at).strftime('%H:%M:%S') if tc.created_at else '—'
+            hora_cancelacion_txt = timezone.localtime(tc.updated_at).strftime('%H:%M:%S') if tc.updated_at else '—'
+            detalle_cancelados_admision.append({
+                'numero_llamado': tc.numero_llamado,
+                'dni': tc.dni or '—',
+                'prefijo': tc.prefijo,
+                'categoria_label': tc.categoria_label or MAPA_PREFIJO_LABEL.get(tc.prefijo, tc.prefijo),
+                'hora_emision': hora_creacion_txt,
+                'hora_cancelacion': hora_cancelacion_txt,
+                'motivo_cancelacion': (tc.motivo_cancelacion or 'Sin especificar').strip() or 'Sin especificar',
+            })
+
         auditoria_box['detalle_modificaciones_estudios'] = detalle_modificaciones_estudios
         auditoria_box['detalle_cierres_cancelados_box'] = detalle_cierres_cancelados_box
         auditoria_box['detalle_triage_otro'] = detalle_triage_otro
+        auditoria_box['detalle_cancelados_admision'] = detalle_cancelados_admision
 
         # 9.4 Rendimiento por Box Físico (Hoja 3)
         boxes_raw = list(

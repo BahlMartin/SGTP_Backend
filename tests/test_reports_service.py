@@ -11,6 +11,7 @@ from app.models.user import Personal, RolPersonal
 from app.models.patient import Paciente
 from app.models.box import Box, AsignacionesBox
 from app.models.shifts import HabilitacionHoraria
+from app.models.reception import TurnoRecepcion, EstadoTurnoRecepcion, CategoriaTurnoRecepcion
 from app.models.ticket import (
     Ticket,
     TicketEstudios,
@@ -424,3 +425,65 @@ class ReportsServiceTestCase(TestCase):
         self.assertEqual(res.data['fecha_desde'], ayer.isoformat())
         self.assertEqual(res.data['fecha_hasta'], hoy.isoformat())
         self.assertEqual(res.data['fecha'], f'{ayer.isoformat()} al {hoy.isoformat()}')
+
+    def test_pacientes_cancelados_admision_en_reportes_pdf_excel_metricas(self):
+        """Verifica que los pacientes y turnos cancelados en admisión se contabilicen en métricas, PDF y Excel."""
+        # Crear un turno de recepción cancelado en admisión por ausencia del paciente
+        turno_cancelado = TurnoRecepcion.objects.create(
+            dni='38123456',
+            prefijo=CategoriaTurnoRecepcion.GUARDIA,
+            numero_secuencia=1,
+            numero_llamado='G-01',
+            categoria_label='Guardia / Urgencia',
+            estado=EstadoTurnoRecepcion.CANCELADO,
+            motivo_cancelacion='Paciente ausente al llamado en sala'
+        )
+
+        # Consolidar métricas completas para Excel y PDF
+        metricas = ReportService.consolidar_metricas_diarias(
+            timezone.now().date(),
+            incluir_detalle_excel=True
+        )
+
+        # 1. Indicadores globales
+        # self.ticket (atendido) + turno_cancelado (cancelado admisión) = 2 emitidos/ingresos
+        self.assertEqual(metricas['total_emitidos'], 2)
+        self.assertEqual(metricas['total_atendidos'], 1)
+        self.assertEqual(metricas['total_cancelados'], 1)
+        self.assertEqual(metricas['total_cancelados_admision'], 1)
+        self.assertEqual(metricas['total_cancelados_box'], 0)
+        self.assertEqual(metricas['tasa_completitud_porcentaje'], 50.0)
+        self.assertEqual(metricas['tasa_desercion_porcentaje'], 50.0)
+
+        # 2. Distribución de Triage (debe sumar la categoría 'guardia' del turno cancelado)
+        triage_guardia = next((t for t in metricas['distribucion_triage'] if t['clasificacion_triage'] == 'guardia'), None)
+        self.assertIsNotNone(triage_guardia)
+        self.assertEqual(triage_guardia['cantidad'], 2)  # 1 ticket + 1 turno cancelado
+
+        # 3. Auditoría de cancelaciones en admisión
+        audit = metricas['auditoria_box']
+        self.assertEqual(audit['total_cancelados_admision'], 1)
+        self.assertEqual(len(audit['motivos_cancelacion_admision']), 1)
+        self.assertEqual(audit['motivos_cancelacion_admision'][0]['motivo_cancelacion'], 'Paciente ausente al llamado en sala')
+        self.assertEqual(len(audit['detalle_cancelados_admision']), 1)
+        self.assertEqual(audit['detalle_cancelados_admision'][0]['numero_llamado'], 'G-01')
+
+        # 4. Compilación de PDF
+        pdf_bytes = ReportService.generar_pdf_reporte(metricas)
+        self.assertTrue(pdf_bytes.startswith(b'%PDF-'))
+        self.assertGreater(len(pdf_bytes), 1000)
+
+        # 5. Compilación de Excel
+        excel_bytes = ReportService.generar_excel_reporte(metricas)
+        self.assertTrue(excel_bytes.startswith(b'PK'))
+
+        from openpyxl import load_workbook
+        wb = load_workbook(io.BytesIO(excel_bytes))
+        self.assertIn('1. Resumen y Flujo', wb.sheetnames)
+        self.assertIn('5. Auditoría', wb.sheetnames)
+
+        # Verificar que la hoja de auditoría contenga el turno cancelado
+        ws_audit = wb['5. Auditoría']
+        valores_celdas = [str(cell.value) for row in ws_audit.iter_rows() for cell in row if cell.value]
+        self.assertTrue(any('G-01' in v for v in valores_celdas))
+        self.assertTrue(any('Paciente ausente al llamado en sala' in v for v in valores_celdas))

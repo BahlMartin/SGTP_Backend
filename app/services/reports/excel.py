@@ -274,13 +274,15 @@ class ReportExcelGenerator:
         # 1. KPIs Generales
         fila = cls._agregar_titulo_seccion(ws, fila, "1. Indicadores Clave de la Jornada (KPIs)", max_cols=6)
         filas_kpis = [
-            ("Tickets Emitidos (Ingresos Totales)", int(m.get('total_emitidos', 0)), "Total de pacientes admitidos en la fecha"),
+            ("Ingresos Totales (Tótem y Admisión)", int(m.get('total_emitidos', 0)), "Total de pacientes que ingresaron al circuito asistencial"),
             ("Pacientes Atendidos (Finalizados)", int(m.get('total_atendidos', 0)), "Atenciones completadas en box de extracción"),
             ("Pacientes Críticos Atendidos", int(m.get('total_criticos_atendidos', 0)), "Prioridad Guardia + Médicos finalizados"),
-            ("Tickets Cancelados / Ausentes", int(m.get('total_cancelados', 0)), "Pacientes ausentes al llamado o dados de baja"),
+            ("Total Pacientes Cancelados / Ausentes", int(m.get('total_cancelados', 0)), "Total consolidado de cancelaciones (admisión + box)"),
+            ("  · Cancelados en Mostrador de Admisión", int(m.get('total_cancelados_admision', 0)), "Turnos de recepción cancelados por ausencia u otros motivos"),
+            ("  · Cancelados / Ausentes en Box", int(m.get('total_cancelados_box', 0)), "Pacientes ausentes o dados de baja en box de extracción"),
             ("Tickets En Curso / Pendientes", int(m.get('total_en_curso', 0)), "En sala de espera o en box actualmente"),
             ("Tasa de Completitud Asistencial (%)", float(m.get('tasa_completitud_porcentaje', 0.0)), "Porcentaje de ingresos atendidos con éxito"),
-            ("Tasa de Deserción / Cancelación (%)", float(m.get('tasa_desercion_porcentaje', 0.0)), "Porcentaje de ingresos cancelados o ausentes"),
+            ("Tasa de Deserción / Cancelación (%)", float(m.get('tasa_desercion_porcentaje', 0.0)), "Porcentaje global de cancelaciones sobre ingresos"),
             ("Tiempo Promedio de Espera (min)", float(m.get('promedio_espera_minutos', 0.0)), "Desde admisión hasta llamado en box"),
             ("Tiempo Promedio de Atención en Box (min)", float(m.get('promedio_atencion_minutos', 0.0)), "Desde llamado hasta cierre de atención en box"),
             ("Total de Estudios / Prácticas Realizadas", int(m.get('total_estudios', 0)), "Prácticas efectivas (excluye canceladas)"),
@@ -820,7 +822,7 @@ class ReportExcelGenerator:
             )
             for to in auditoria.get('detalle_triage_otro', [])
         ]
-        cls._agregar_tabla(
+        fila = cls._agregar_tabla(
             ws,
             fila,
             [
@@ -835,6 +837,40 @@ class ReportExcelGenerator:
             filas_triage_otro,
             alineaciones=['C', 'C', 'C', 'L', 'L', 'L', 'C'],
             mensaje_vacio="No se emitieron tickets bajo la categoría «Otro» en la jornada."
+        )
+
+        # 6. Auditoría de Pacientes y Turnos Cancelados en Admisión
+        fila = cls._agregar_titulo_seccion(
+            ws,
+            fila,
+            "6. Auditoría de Turnos y Pacientes Cancelados en Mostrador de Admisión",
+            max_cols=9
+        )
+        filas_canc_adm = [
+            (
+                tc.get('numero_llamado', '—'),
+                tc.get('dni', '—'),
+                tc.get('categoria_label', tc.get('prefijo', '—')),
+                tc.get('hora_emision', '—'),
+                tc.get('hora_cancelacion', '—'),
+                tc.get('motivo_cancelacion', 'Sin especificar'),
+            )
+            for tc in auditoria.get('detalle_cancelados_admision', [])
+        ]
+        cls._agregar_tabla(
+            ws,
+            fila,
+            [
+                "N° Turno / Llamado",
+                "DNI Paciente",
+                "Categoría / Servicio",
+                "Hora Emisión",
+                "Hora Cancelación",
+                "Motivo de Cancelación Registrado",
+            ],
+            filas_canc_adm,
+            alineaciones=['C', 'C', 'L', 'C', 'C', 'L'],
+            mensaje_vacio="Sin turnos cancelados en mostrador de admisión durante la jornada."
         )
 
         cls._autoajustar_columnas(ws)

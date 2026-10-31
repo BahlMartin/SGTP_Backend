@@ -27,7 +27,7 @@ class ReportFacade:
         cls,
         fecha_consulta: Optional[date] = None,
         incluir_detalle_excel: bool = False,
-        incluir_rendimiento_personal: bool = False,
+        incluir_rendimiento_personal: bool = True,
         fecha_hasta: Optional[date] = None
     ) -> Dict[str, Any]:
         """
