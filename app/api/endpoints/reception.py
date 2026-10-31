@@ -116,7 +116,12 @@ class TurnoRecepcionViewSet(viewsets.ReadOnlyModelViewSet):
         motivo = serializer.validated_data.get('motivo')
 
         try:
-            turno = ReceptionService.cancelar_turno(pk, motivo=motivo)
+            turno = ReceptionService.cancelar_turno(
+                pk,
+                motivo=motivo,
+                usuario=request.user,
+                request=request
+            )
             return Response(TurnoRecepcionSerializer(turno).data)
         except TurnoRecepcion.DoesNotExist:
             return Response({'error': 'Turno no encontrado.'}, status=status.HTTP_404_NOT_FOUND)
