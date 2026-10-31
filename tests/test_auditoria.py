@@ -326,6 +326,8 @@ class AuditoriaIntegrationTestCase(TestCase):
         self.assertIn('resumen', data)
         self.assertIn('turno_programado', data)
         self.assertIn('bloques_actividad', data)
+        self.assertIn('barras_actividad', data)
+        self.assertIn('gaps', data)
         self.assertIn('timeline', data)
 
         resumen = data['resumen']
