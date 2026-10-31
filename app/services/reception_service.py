@@ -108,18 +108,29 @@ class ReceptionService:
     @staticmethod
     def obtener_turnos_pendientes_hoy() -> List[TurnoRecepcion]:
         """
-        Retorna únicamente los turnos del día que siguen en espera activa.
-        Los turnos que ya fueron llamados a mostrador o admitidos quedan excluidos.
+        Retorna únicamente los turnos del día que siguen en espera activa,
+        ordenados según prioridad asistencial de Triage (Guardia > Médicos > Extracción > Consulta)
+        y criterio cronológico FIFO (created_at).
         """
         hoy = timezone.localdate()
         inicio_hoy = timezone.make_aware(
             timezone.datetime.combine(hoy, timezone.datetime.min.time()),
             timezone.get_current_timezone()
         )
+        orden_prioridad = models.Case(
+            models.When(prefijo='G', then=models.Value(1)),
+            models.When(prefijo='Med', then=models.Value(2)),
+            models.When(prefijo='Ext', then=models.Value(3)),
+            models.When(prefijo='Csl', then=models.Value(4)),
+            default=models.Value(99),
+            output_field=models.IntegerField()
+        )
         return TurnoRecepcion.objects.filter(
             created_at__gte=inicio_hoy,
             estado=EstadoTurnoRecepcion.PENDIENTE
-        ).order_by('created_at')
+        ).annotate(
+            prioridad_triage=orden_prioridad
+        ).order_by('prioridad_triage', 'created_at')
 
     @staticmethod
     @transaction.atomic
