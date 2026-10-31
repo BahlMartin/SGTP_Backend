@@ -158,14 +158,21 @@ class EventoAuditoriaDetailView(APIView):
 
 
 class AuditoriaResumenKpisView(APIView):
-    """Retorna las 6 métricas/KPIs clave para la cabecera interactiva."""
+    """Retorna las 6 métricas/KPIs clave para la cabecera interactiva y feed reciente filtrado."""
     permission_classes = [IsAuthenticated, IsJefaRole]
 
     def get(self, request: Request) -> Response:
         qs_base = AuditService.queryset_visible_para(request.user)
+        params_kpi = {
+            'periodo': request.query_params.get('periodo', 'hoy'),
+            'desde': request.query_params.get('desde'),
+            'hasta': request.query_params.get('hasta'),
+            'rol': request.query_params.get('rol')
+        }
+        qs_kpi = aplicar_filtros_auditoria(qs_base, params_kpi)
         qs_filtrado = aplicar_filtros_auditoria(qs_base, request.query_params)
 
-        kpis = AuditService.obtener_resumen_kpis(qs_filtrado, user=request.user)
+        kpis = AuditService.obtener_resumen_kpis(qs_kpi, user=request.user, qs_feed=qs_filtrado)
         return Response(kpis, status=status.HTTP_200_OK)
 
 
@@ -458,12 +465,23 @@ class EmpleadoJornadaView(APIView):
                 ] or ev.resultado == ResultadoAuditoria.FALLO
             })
 
-        # Generación de barras verticales de actividad (intervalos de 15 minutos entre 07:00 y 19:00 o turno)
-        hora_min = 7.0
-        hora_max = 19.0
-        if not es_ilimitado and (inicio_turno_hora < 7.0 or fin_turno_hora > 19.0):
-            hora_min = max(0.0, inicio_turno_hora - 1.0)
-            hora_max = min(24.0, fin_turno_hora + 1.0)
+        # Generación de barras verticales de actividad (15 min)
+        if es_ilimitado:
+            hora_min = 0.0
+            hora_max = 24.0
+        else:
+            hora_min = 7.0
+            hora_max = 19.0
+            if inicio_turno_hora < 7.0 or fin_turno_hora > 19.0:
+                hora_min = max(0.0, inicio_turno_hora - 1.0)
+                hora_max = min(24.0, fin_turno_hora + 1.0)
+            for ev in eventos_dia:
+                ev_loc = timezone.localtime(ev.fecha)
+                ev_h = ev_loc.hour + round(ev_loc.minute / 60.0, 2)
+                if ev_h < hora_min:
+                    hora_min = max(0.0, float(int(ev_h)))
+                if ev_h >= hora_max:
+                    hora_max = min(24.0, float(int(ev_h) + 1))
 
         intervalo_h = 0.25  # 15 min
         num_slots = int(round((hora_max - hora_min) / intervalo_h))

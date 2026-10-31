@@ -457,7 +457,7 @@ class AuditService:
         return True
 
     @classmethod
-    def obtener_resumen_kpis(cls, queryset, fecha_desde=None, fecha_hasta=None, user=None) -> Dict[str, Any]:
+    def obtener_resumen_kpis(cls, queryset, fecha_desde=None, fecha_hasta=None, user=None, qs_feed=None) -> Dict[str, Any]:
         """Calcula los 6 KPIs principales para la cabecera interactiva."""
         hoy = timezone.localdate()
         qs_hoy = queryset.filter(fecha__date=hoy)
@@ -583,8 +583,9 @@ class AuditService:
                     'w': f"{pct}%"
                 })
 
-        # Feed reciente (últimos 20 eventos)
-        feed_qs = queryset.select_related('usuario').order_by('-fecha')[:20]
+        # Feed reciente (últimos 20 eventos según filtro aplicado)
+        feed_source = qs_feed if qs_feed is not None else queryset
+        feed_qs = feed_source.select_related('usuario').order_by('-fecha')[:20]
         feed_reciente = []
         for ev in feed_qs:
             ev_local = timezone.localtime(ev.fecha)
