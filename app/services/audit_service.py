@@ -507,20 +507,98 @@ class AuditService:
                     'ip': ev.ip
                 })
 
-        # Personal activo: usuarios con actividad en 24h o personal activo del hospital
-        hace_24h = timezone.now() - timedelta(hours=24)
-        usuarios_activos_24h = (
-            queryset.filter(fecha__gte=hace_24h)
+        # Usuarios activos con sesión abierta hoy (login sin logout posterior)
+        logins_hoy_uids = (
+            qs_hoy.filter(accion=AccionAuditoria.LOGIN_EXITOSO)
             .exclude(usuario=None)
             .values_list('usuario_id', flat=True)
             .distinct()
-            .count()
         )
+        usuarios_con_sesion = 0
+        for uid in logins_hoy_uids:
+            ultimo_evento_auth = (
+                qs_hoy.filter(usuario_id=uid, accion__in=[AccionAuditoria.LOGIN_EXITOSO, AccionAuditoria.LOGOUT])
+                .order_by('-fecha')
+                .first()
+            )
+            if ultimo_evento_auth and ultimo_evento_auth.accion == AccionAuditoria.LOGIN_EXITOSO:
+                usuarios_con_sesion += 1
+
         total_personal_qs = Personal.objects.filter(activo=True)
         if user and getattr(user, 'rol', None) == RolPersonal.JEFA:
             total_personal_qs = total_personal_qs.exclude(rol=RolPersonal.ADMIN)
         total_personal_activo = total_personal_qs.count()
-        usuarios_activos = max(usuarios_activos_24h, total_personal_activo)
+        usuarios_activos_ratio = f"{usuarios_con_sesion} / {total_personal_activo}"
+        usuarios_activos_24h = queryset.exclude(usuario=None).values('usuario').distinct().count()
+
+        # Actividad por hora (07 a 19)
+        eventos_hoy_list = list(qs_hoy.only('fecha'))
+        conteo_horas = {}
+        for ev in eventos_hoy_list:
+            h_local = timezone.localtime(ev.fecha).hour
+            conteo_horas[h_local] = conteo_horas.get(h_local, 0) + 1
+
+        max_h_count = max(conteo_horas.values()) if conteo_horas else 1
+        actividad_por_hora = []
+        for h in range(7, 20):
+            c = conteo_horas.get(h, 0)
+            pct = max(6, int((c / max_h_count) * 100)) if c > 0 else 6
+            actividad_por_hora.append({
+                'hora': f"{h:02d}",
+                'hora_num': h,
+                'count': c,
+                'h': f"{pct}%"
+            })
+
+        # Cancelaciones por motivo de la app
+        canc_eventos = list(qs_hoy.filter(accion=AccionAuditoria.ATENCION_CANCELADA).only('metadata', 'descripcion'))
+        motivos_conteo = {
+            'Paciente no se presentó': 0,
+            'Se retiró del establecimiento': 0,
+            'Falta de ayuno / indicación': 0,
+            'Error de carga / DNI erróneo': 0,
+            'Otro': 0
+        }
+        for ce in canc_eventos:
+            obs = ((ce.metadata or {}).get('motivo') or (ce.metadata or {}).get('observaciones') or ce.descripcion or '').lower()
+            if 'no respondió' in obs or 'no respondio' in obs or 'no se presentó' in obs or 'no se presento' in obs or 'ausen' in obs:
+                motivos_conteo['Paciente no se presentó'] += 1
+            elif 'retiró' in obs or 'retiro' in obs or 'mostrador' in obs:
+                motivos_conteo['Se retiró del establecimiento'] += 1
+            elif 'ayuno' in obs or 'posterg' in obs or 'indicaci' in obs:
+                motivos_conteo['Falta de ayuno / indicación'] += 1
+            elif 'error' in obs or 'dni' in obs or 'tótem' in obs or 'totem' in obs:
+                motivos_conteo['Error de carga / DNI erróneo'] += 1
+            else:
+                motivos_conteo['Otro'] += 1
+
+        total_canc_motivos = max(sum(motivos_conteo.values()), 1)
+        cancelaciones_por_motivo = []
+        for m_label, m_count in motivos_conteo.items():
+            if m_count > 0 or m_label in ['Paciente no se presentó', 'Se retiró del establecimiento', 'Falta de ayuno / indicación']:
+                pct = max(4, int((m_count / total_canc_motivos) * 100)) if m_count > 0 else 4
+                cancelaciones_por_motivo.append({
+                    'label': m_label,
+                    'n': m_count,
+                    'w': f"{pct}%"
+                })
+
+        # Feed reciente (últimos 20 eventos)
+        feed_qs = queryset.select_related('usuario').order_by('-fecha')[:20]
+        feed_reciente = []
+        for ev in feed_qs:
+            ev_local = timezone.localtime(ev.fecha)
+            who = f"{ev.usuario.nombre} {ev.usuario.apellidos}".strip() if ev.usuario else (ev.email_intentado or 'Sistema')
+            feed_reciente.append({
+                'id': ev.id,
+                't': ev_local.strftime('%H:%M'),
+                'who': who,
+                'what': ev.descripcion,
+                'categoria': ev.categoria,
+                'accion': ev.accion,
+                'resultado': ev.resultado,
+                'alertas': ev.alertas or []
+            })
 
         return {
             'logins_hoy': total_logins_hoy,
@@ -533,10 +611,15 @@ class AuditService:
             'escaneos_ocr_hoy': escaneos_ocr_hoy,
             'alertas_activas': alertas_activas,
             'alertas_periodo': alertas_activas,
-            'usuarios_activos_24h': usuarios_activos,
-            'usuarios_activos_hoy': usuarios_activos,
-            'usuarios_activos': usuarios_activos,
-            'alertas_recientes': alertas_recientes[:8]
+            'usuarios_activos_24h': usuarios_activos_24h,
+            'usuarios_activos_hoy': usuarios_con_sesion,
+            'usuarios_activos': usuarios_con_sesion,
+            'usuarios_activos_ratio': usuarios_activos_ratio,
+            'total_personal_activo': total_personal_activo,
+            'alertas_recientes': alertas_recientes[:8],
+            'actividad_por_hora': actividad_por_hora,
+            'cancelaciones_por_motivo': cancelaciones_por_motivo,
+            'feed_reciente': feed_reciente
         }
 
     @classmethod

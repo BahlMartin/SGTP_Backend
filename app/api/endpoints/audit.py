@@ -458,6 +458,60 @@ class EmpleadoJornadaView(APIView):
                 ] or ev.resultado == ResultadoAuditoria.FALLO
             })
 
+        # Generación de barras verticales de actividad (intervalos de 15 minutos entre 07:00 y 19:00 o turno)
+        hora_min = 7.0
+        hora_max = 19.0
+        if not es_ilimitado and (inicio_turno_hora < 7.0 or fin_turno_hora > 19.0):
+            hora_min = max(0.0, inicio_turno_hora - 1.0)
+            hora_max = min(24.0, fin_turno_hora + 1.0)
+
+        intervalo_h = 0.25  # 15 min
+        num_slots = int(round((hora_max - hora_min) / intervalo_h))
+        slots_barras = []
+        max_slot_cnt = 1
+
+        for s_idx in range(num_slots):
+            s_ini = hora_min + (s_idx * intervalo_h)
+            s_fin = s_ini + intervalo_h
+            h_ini_i = int(s_ini)
+            m_ini_i = int(round((s_ini - h_ini_i) * 60))
+            h_fin_i = int(s_fin)
+            m_fin_i = int(round((s_fin - h_fin_i) * 60))
+            if m_fin_i >= 60:
+                h_fin_i += 1
+                m_fin_i = 0
+
+            evs_slot = []
+            for ev in eventos_dia:
+                ev_loc = timezone.localtime(ev.fecha)
+                ev_val = ev_loc.hour + round(ev_loc.minute / 60.0, 2)
+                if s_ini <= ev_val < s_fin:
+                    evs_slot.append(ev.id)
+
+            cnt = len(evs_slot)
+            if cnt > max_slot_cnt:
+                max_slot_cnt = cnt
+
+            es_en_turno = True if es_ilimitado else (inicio_turno_hora <= s_ini < fin_turno_hora)
+
+            slots_barras.append({
+                'id': f"bar-{s_idx}",
+                'inicio': round(s_ini, 2),
+                'fin': round(s_fin, 2),
+                'hora_label': f"{h_ini_i:02d}:{m_ini_i:02d}",
+                'rango': f"{h_ini_i:02d}:{m_ini_i:02d} – {h_fin_i:02d}:{m_fin_i:02d}",
+                'count': cnt,
+                'event_ids': evs_slot,
+                'es_turno': es_en_turno
+            })
+
+        for sb in slots_barras:
+            if sb['count'] > 0:
+                pct = max(18, int((sb['count'] / max_slot_cnt) * 95))
+                sb['h'] = f"{pct}%"
+            else:
+                sb['h'] = '2px'
+
         return Response({
             'empleado': {
                 'id': empleado.pk,
@@ -492,6 +546,7 @@ class EmpleadoJornadaView(APIView):
             },
             'bloques_actividad': bloques,
             'bloquesActividad': bloques,
+            'barras_actividad': slots_barras,
             'timeline': timeline,
         }, status=status.HTTP_200_OK)
 
