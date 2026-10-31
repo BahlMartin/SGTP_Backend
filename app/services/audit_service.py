@@ -464,6 +464,38 @@ class AuditService:
         return True
 
     @classmethod
+    def obtener_uids_usuarios_activos(cls, user=None) -> List[int]:
+        """
+        Retorna la lista de IDs únicos de usuarios que se encuentran actualmente logueados en la app
+        (LOGIN_EXITOSO en el día sin un LOGOUT posterior). Respeta reglas RBAC si user es Jefa.
+        """
+        hoy = timezone.localdate()
+        qs_base = EventoAuditoria.objects.filter(fecha__date=hoy).exclude(usuario=None)
+        if user and getattr(user, 'rol', None) == RolPersonal.JEFA:
+            qs_base = qs_base.exclude(rol_usuario=RolPersonal.ADMIN)
+
+        uids_candidatos = set(
+            qs_base.order_by()
+            .filter(accion=AccionAuditoria.LOGIN_EXITOSO)
+            .values_list('usuario_id', flat=True)
+        )
+
+        uids_activos = []
+        for uid in uids_candidatos:
+            ultimo_evento_auth = (
+                qs_base.filter(
+                    usuario_id=uid,
+                    accion__in=[AccionAuditoria.LOGIN_EXITOSO, AccionAuditoria.LOGOUT]
+                )
+                .order_by('-fecha', '-id')
+                .first()
+            )
+            if ultimo_evento_auth and ultimo_evento_auth.accion == AccionAuditoria.LOGIN_EXITOSO:
+                uids_activos.append(uid)
+
+        return uids_activos
+
+    @classmethod
     def obtener_resumen_kpis(cls, queryset, fecha_desde=None, fecha_hasta=None, user=None, qs_feed=None) -> Dict[str, Any]:
         """Calcula los 6 KPIs principales para la cabecera interactiva."""
         hoy = timezone.localdate()
@@ -514,22 +546,9 @@ class AuditService:
                     'ip': ev.ip
                 })
 
-        # Usuarios activos con sesión abierta hoy (login sin logout posterior)
-        logins_hoy_uids = (
-            qs_hoy.filter(accion=AccionAuditoria.LOGIN_EXITOSO)
-            .exclude(usuario=None)
-            .values_list('usuario_id', flat=True)
-            .distinct()
-        )
-        usuarios_con_sesion = 0
-        for uid in logins_hoy_uids:
-            ultimo_evento_auth = (
-                qs_hoy.filter(usuario_id=uid, accion__in=[AccionAuditoria.LOGIN_EXITOSO, AccionAuditoria.LOGOUT])
-                .order_by('-fecha')
-                .first()
-            )
-            if ultimo_evento_auth and ultimo_evento_auth.accion == AccionAuditoria.LOGIN_EXITOSO:
-                usuarios_con_sesion += 1
+        # Usuarios activos con sesión abierta actualmente en la app (IDs únicos)
+        uids_activos = cls.obtener_uids_usuarios_activos(user=user)
+        usuarios_con_sesion = len(uids_activos)
 
         total_personal_qs = Personal.objects.filter(activo=True)
         if user and getattr(user, 'rol', None) == RolPersonal.JEFA:
