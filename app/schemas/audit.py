@@ -1,6 +1,7 @@
 """
 Serializadores DRF para Auditoría Operacional y Geolocalización (SGTP).
 """
+from django.utils import timezone
 from rest_framework import serializers
 from app.models.audit import EventoAuditoria
 from app.models.user import Personal
@@ -62,7 +63,7 @@ class EventoAuditoriaListSerializer(serializers.ModelSerializer):
 
     def get_hora(self, obj) -> str:
         if obj.fecha:
-            return obj.fecha.strftime('%H:%M')
+            return timezone.localtime(obj.fecha).strftime('%H:%M')
         return ''
 
 

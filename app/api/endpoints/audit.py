@@ -72,6 +72,14 @@ def aplicar_filtros_auditoria(qs, params):
     if accion:
         qs = qs.filter(accion=accion)
 
+    ocr = str(params.get('ocr', '')).lower() in ['true', '1', 'yes']
+    if ocr:
+        qs = qs.filter(accion__in=[AccionAuditoria.RECETA_ESCANEADA, AccionAuditoria.OCR_CORREGIDO])
+
+    personal_activo = str(params.get('personal_activo', '')).lower() in ['true', '1', 'yes']
+    if personal_activo:
+        qs = qs.filter(usuario__isnull=False, usuario__activo=True)
+
     resultado = params.get('resultado')
     if resultado:
         qs = qs.filter(resultado=resultado)
@@ -202,6 +210,7 @@ class ExportarAuditoriaExcelView(APIView):
         )
 
         for ev in eventos:
+            fecha_local = timezone.localtime(ev.fecha)
             nombre_emp = f"{ev.usuario.nombre} {ev.usuario.apellidos}" if ev.usuario else (ev.email_intentado or 'Desconocido')
             gps_str = f"{ev.geo_nav_lat}, {ev.geo_nav_lon} (±{ev.geo_nav_precision_m}m)" if ev.geo_nav_lat is not None else ev.geo_nav_estado
             alertas_str = "; ".join([f"[{a.get('severidad')}]: {a.get('texto')}" for a in (ev.alertas or [])])
@@ -209,8 +218,8 @@ class ExportarAuditoriaExcelView(APIView):
 
             row_data = [
                 ev.id,
-                ev.fecha.strftime("%Y-%m-%d"),
-                ev.fecha.strftime("%H:%M:%S"),
+                fecha_local.strftime("%Y-%m-%d"),
+                fecha_local.strftime("%H:%M:%S"),
                 nombre_emp,
                 ev.rol_usuario or 'Sin sesión',
                 ev.categoria.capitalize(),
@@ -318,14 +327,19 @@ class EmpleadoJornadaView(APIView):
             fecha_obj = hoy
 
         # Turno asignado
-        inicio_turno_hora = 7.0
-        fin_turno_hora = 15.0
-        turno_label = "07:00–15:00"
-
-        if empleado.inicio_turno and empleado.fin_turno:
+        es_ilimitado = empleado.rol in ['Admin', 'Jefa']
+        if es_ilimitado:
+            inicio_turno_hora = 0.0
+            fin_turno_hora = 24.0
+            turno_label = "Acceso ilimitado (00:00 a 23:59:59)"
+        elif empleado.inicio_turno and empleado.fin_turno:
             inicio_turno_hora = empleado.inicio_turno.hour + round(empleado.inicio_turno.minute / 60.0, 2)
             fin_turno_hora = empleado.fin_turno.hour + round(empleado.fin_turno.minute / 60.0, 2)
             turno_label = f"{empleado.inicio_turno.strftime('%H:%M')}–{empleado.fin_turno.strftime('%H:%M')}"
+        else:
+            inicio_turno_hora = 7.0
+            fin_turno_hora = 15.0
+            turno_label = "07:00–15:00"
 
         eventos_dia = list(EventoAuditoria.objects.filter(
             usuario=empleado,
@@ -333,52 +347,61 @@ class EmpleadoJornadaView(APIView):
         ).order_by('fecha', 'id'))
 
         total_eventos = len(eventos_dia)
-        primera_act = eventos_dia[0].fecha.strftime('%H:%M') if total_eventos > 0 else '—'
-        ultima_act = eventos_dia[-1].fecha.strftime('%H:%M') if total_eventos > 0 else '—'
+        primera_act = timezone.localtime(eventos_dia[0].fecha).strftime('%H:%M') if total_eventos > 0 else '—'
+        ultima_act = timezone.localtime(eventos_dia[-1].fecha).strftime('%H:%M') if total_eventos > 0 else '—'
         cancelaciones = sum(1 for e in eventos_dia if e.accion == AccionAuditoria.ATENCION_CANCELADA)
         alertas = sum(len(e.alertas or []) for e in eventos_dia)
 
         # Cálculo de bloques de actividad para el gráfico SVG
         bloques = []
         if total_eventos > 0:
-            bloque_actual_inicio = None
-            bloque_actual_fin = None
-            tipo_actual = None
-
             for ev in eventos_dia:
-                h = ev.fecha.hour + round(ev.fecha.minute / 60.0, 2)
-                # Determinar si está dentro de la franja horaria asignada
-                es_dentro_turno = (inicio_turno_hora <= h <= fin_turno_hora)
+                ev_local = timezone.localtime(ev.fecha)
+                h = ev_local.hour + round(ev_local.minute / 60.0, 2)
+                es_dentro_turno = True if es_ilimitado else (inicio_turno_hora <= h <= fin_turno_hora)
                 tipo = 'normal' if es_dentro_turno else 'fuera_turno'
 
-                if bloque_actual_inicio is None:
-                    bloque_actual_inicio = h
-                    bloque_actual_fin = h + 0.15
-                    tipo_actual = tipo
-                elif h - bloque_actual_fin <= 0.5 and tipo == tipo_actual:
-                    bloque_actual_fin = max(bloque_actual_fin, h + 0.15)
+                # Determinación de color_tipo
+                if ev.accion in [AccionAuditoria.LOGIN_EXITOSO, AccionAuditoria.LOGIN_FALLIDO, AccionAuditoria.LOGOUT] or ev.categoria == 'acceso':
+                    color_tipo = 'login'
+                elif ev.accion == AccionAuditoria.ATENCION_CANCELADA:
+                    color_tipo = 'cancelacion'
+                elif (ev.alertas and len(ev.alertas) > 0) or ev.resultado == ResultadoAuditoria.FALLO or ev.accion in [AccionAuditoria.CUENTA_BLOQUEADA_AUTO, AccionAuditoria.ACCESO_FUERA_DE_TURNO, AccionAuditoria.DESBLOQUEO_EMERGENCIA]:
+                    color_tipo = 'alerta'
+                elif ev.accion in [AccionAuditoria.TICKET_CREADO, AccionAuditoria.PACIENTE_LLAMADO, AccionAuditoria.ATENCION_FINALIZADA, AccionAuditoria.RECETA_ESCANEADA, AccionAuditoria.OCR_CORREGIDO, AccionAuditoria.BOX_TOMADO] or ev.categoria in ['admision', 'box']:
+                    color_tipo = 'ticket'
                 else:
-                    bloques.append({'inicio': bloque_actual_inicio, 'fin': bloque_actual_fin, 'tipo': tipo_actual})
-                    bloque_actual_inicio = h
-                    bloque_actual_fin = h + 0.15
-                    tipo_actual = tipo
+                    color_tipo = 'gestion'
 
-            if bloque_actual_inicio is not None:
-                bloques.append({'inicio': bloque_actual_inicio, 'fin': bloque_actual_fin, 'tipo': tipo_actual})
+                bloques.append({
+                    'inicio': round(h, 2),
+                    'fin': round(h + 0.18, 2),
+                    'tipo': tipo,
+                    'color_tipo': color_tipo,
+                    'evento_id': ev.id,
+                    'inicio_str': ev_local.strftime('%H:%M'),
+                    'fin_str': (ev_local + timedelta(minutes=10)).strftime('%H:%M'),
+                    'titulo': ev.descripcion,
+                    'accion': ev.accion,
+                    'categoria': ev.categoria,
+                    'eventos': 1
+                })
 
         # Construcción de la línea de tiempo con gaps y eventos detallados
         timeline = []
         for i, ev in enumerate(eventos_dia):
+            ev_local = timezone.localtime(ev.fecha)
             # Detectar gap > 30 minutos con respecto al evento previo
             if i > 0:
                 diff_min = int((ev.fecha - eventos_dia[i - 1].fecha).total_seconds() / 60)
                 if diff_min >= 30:
-                    desde_str = eventos_dia[i - 1].fecha.strftime('%H:%M')
-                    hasta_str = ev.fecha.strftime('%H:%M')
+                    desde_str = timezone.localtime(eventos_dia[i - 1].fecha).strftime('%H:%M')
+                    hasta_str = ev_local.strftime('%H:%M')
                     timeline.append({
                         'id': f'gap-{i}',
                         'tipo': 'gap',
                         'tipoGap': True,
+                        'color_tipo': 'pausa',
                         'minutos': diff_min,
                         'duracion_min': diff_min,
                         'desde': desde_str,
@@ -392,11 +415,24 @@ class EmpleadoJornadaView(APIView):
             elif ev.resultado == ResultadoAuditoria.FALLO:
                 alerta_texto = 'Operación fallida'
 
+            # Determinación de color_tipo para el timeline
+            if ev.accion in [AccionAuditoria.LOGIN_EXITOSO, AccionAuditoria.LOGIN_FALLIDO, AccionAuditoria.LOGOUT] or ev.categoria == 'acceso':
+                color_tipo = 'login'
+            elif ev.accion == AccionAuditoria.ATENCION_CANCELADA:
+                color_tipo = 'cancelacion'
+            elif (ev.alertas and len(ev.alertas) > 0) or ev.resultado == ResultadoAuditoria.FALLO or ev.accion in [AccionAuditoria.CUENTA_BLOQUEADA_AUTO, AccionAuditoria.ACCESO_FUERA_DE_TURNO, AccionAuditoria.DESBLOQUEO_EMERGENCIA]:
+                color_tipo = 'alerta'
+            elif ev.accion in [AccionAuditoria.TICKET_CREADO, AccionAuditoria.PACIENTE_LLAMADO, AccionAuditoria.ATENCION_FINALIZADA, AccionAuditoria.RECETA_ESCANEADA, AccionAuditoria.OCR_CORREGIDO, AccionAuditoria.BOX_TOMADO] or ev.categoria in ['admision', 'box']:
+                color_tipo = 'ticket'
+            else:
+                color_tipo = 'gestion'
+
             timeline.append({
                 'id': f'ev-{ev.id}',
                 'eventId': ev.id,
                 'tipo': 'evento',
-                'hora': ev.fecha.strftime('%H:%M'),
+                'hora': ev_local.strftime('%H:%M'),
+                'color_tipo': color_tipo,
                 'categoria': ev.categoria,
                 'accion': ev.accion,
                 'titulo': ev.descripcion,
@@ -407,7 +443,7 @@ class EmpleadoJornadaView(APIView):
                 'evento': {
                     'id': ev.id,
                     'fecha': ev.fecha.isoformat(),
-                    'hora': ev.fecha.strftime('%H:%M'),
+                    'hora': ev_local.strftime('%H:%M'),
                     'categoria': ev.categoria,
                     'accion': ev.accion,
                     'resultado': ev.resultado,
@@ -433,11 +469,13 @@ class EmpleadoJornadaView(APIView):
                 'turno_label': turno_label,
                 'turnoInicio': inicio_turno_hora,
                 'turnoFin': fin_turno_hora,
+                'es_ilimitado': es_ilimitado,
             },
             'turno_programado': {
                 'inicio': inicio_turno_hora,
                 'fin': fin_turno_hora,
-                'label': turno_label
+                'label': turno_label,
+                'es_ilimitado': es_ilimitado,
             },
             'resumen': {
                 'total_eventos': total_eventos,
@@ -449,7 +487,8 @@ class EmpleadoJornadaView(APIView):
                 'cancelaciones': cancelaciones,
                 'alertas': alertas,
                 'turno_label': turno_label,
-                'turnoLabel': turno_label
+                'turnoLabel': turno_label,
+                'es_ilimitado': es_ilimitado,
             },
             'bloques_actividad': bloques,
             'bloquesActividad': bloques,

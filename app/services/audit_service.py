@@ -493,7 +493,7 @@ class AuditService:
                         'severidad': al.get('severidad', 'ALTA' if ev.resultado == ResultadoAuditoria.FALLO else 'MEDIA'),
                         'titulo': al.get('texto', ev.descripcion),
                         'quien': quien,
-                        'hora': ev.fecha.strftime('%H:%M'),
+                        'hora': timezone.localtime(ev.fecha).strftime('%H:%M'),
                         'ip': ev.ip
                     })
             else:
@@ -503,7 +503,7 @@ class AuditService:
                     'severidad': 'ALTA' if ev.resultado == ResultadoAuditoria.FALLO else 'MEDIA',
                     'titulo': ev.descripcion,
                     'quien': quien,
-                    'hora': ev.fecha.strftime('%H:%M'),
+                    'hora': timezone.localtime(ev.fecha).strftime('%H:%M'),
                     'ip': ev.ip
                 })
 
