@@ -13,6 +13,9 @@ from django.core.exceptions import ValidationError
 
 from app.models.reception import TurnoRecepcion, EstadoTurnoRecepcion, CategoriaTurnoRecepcion
 
+from app.services.audit_service import AuditService
+from app.models.audit import AccionAuditoria, ResultadoAuditoria
+
 logger = logging.getLogger('app.services.reception')
 
 LABEL_MAP = {
@@ -178,6 +181,19 @@ class ReceptionService:
                 'motivo_cancelacion': turno.motivo_cancelacion
             }
         )
+
+        try:
+            AuditService.registrar_evento(
+                accion=AccionAuditoria.ATENCION_CANCELADA,
+                resultado=ResultadoAuditoria.EXITO,
+                descripcion=f"Turno de recepción #{turno.numero_llamado} cancelado: {turno.motivo_cancelacion}",
+                entidad_tipo='TurnoRecepcion',
+                entidad_id=str(turno.id),
+                metadata={'motivo': turno.motivo_cancelacion, 'sector': 'admision'}
+            )
+        except Exception as audit_err:
+            logger.warning(f"Error registrando auditoría en cancelar_turno: {audit_err}")
+
         return turno
 
     @staticmethod

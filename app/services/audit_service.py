@@ -540,7 +540,7 @@ class AuditService:
 
         max_h_count = max(conteo_horas.values()) if conteo_horas else 1
         actividad_por_hora = []
-        for h in range(7, 20):
+        for h in range(0, 24):
             c = conteo_horas.get(h, 0)
             pct = max(6, int((c / max_h_count) * 100)) if c > 0 else 6
             actividad_por_hora.append({
@@ -550,38 +550,70 @@ class AuditService:
                 'h': f"{pct}%"
             })
 
-        # Cancelaciones por motivo de la app
-        canc_eventos = list(qs_hoy.filter(accion=AccionAuditoria.ATENCION_CANCELADA).only('metadata', 'descripcion'))
-        motivos_conteo = {
-            'Paciente no se presentó': 0,
-            'Se retiró del establecimiento': 0,
-            'Falta de ayuno / indicación': 0,
-            'Error de carga / DNI erróneo': 0,
-            'Otro': 0
-        }
-        for ce in canc_eventos:
-            obs = ((ce.metadata or {}).get('motivo') or (ce.metadata or {}).get('observaciones') or ce.descripcion or '').lower()
-            if 'no respondió' in obs or 'no respondio' in obs or 'no se presentó' in obs or 'no se presento' in obs or 'ausen' in obs:
-                motivos_conteo['Paciente no se presentó'] += 1
-            elif 'retiró' in obs or 'retiro' in obs or 'mostrador' in obs:
-                motivos_conteo['Se retiró del establecimiento'] += 1
-            elif 'ayuno' in obs or 'posterg' in obs or 'indicaci' in obs:
-                motivos_conteo['Falta de ayuno / indicación'] += 1
-            elif 'error' in obs or 'dni' in obs or 'tótem' in obs or 'totem' in obs:
-                motivos_conteo['Error de carga / DNI erróneo'] += 1
-            else:
-                motivos_conteo['Otro'] += 1
+        # Cancelaciones por motivo de la app (discriminando Admisión y Box)
+        canc_eventos = list(qs_hoy.filter(
+            Q(accion=AccionAuditoria.ATENCION_CANCELADA) | Q(accion__icontains='CANCEL')
+        ).select_related('usuario').only('metadata', 'descripcion', 'accion', 'rol_usuario', 'usuario__rol'))
 
-        total_canc_motivos = max(sum(motivos_conteo.values()), 1)
-        cancelaciones_por_motivo = []
-        for m_label, m_count in motivos_conteo.items():
-            if m_count > 0 or m_label in ['Paciente no se presentó', 'Se retiró del establecimiento', 'Falta de ayuno / indicación']:
-                pct = max(4, int((m_count / total_canc_motivos) * 100)) if m_count > 0 else 4
-                cancelaciones_por_motivo.append({
-                    'label': m_label,
-                    'n': m_count,
-                    'w': f"{pct}%"
-                })
+        def calcular_motivos(evs_lista):
+            motivos_conteo = {
+                'Paciente no se presentó': 0,
+                'Se retiró del establecimiento': 0,
+                'Falta de ayuno / indicación': 0,
+                'Error de carga / DNI erróneo': 0,
+                'Otro': 0
+            }
+            for ce in evs_lista:
+                obs = ((ce.metadata or {}).get('motivo') or (ce.metadata or {}).get('observaciones') or ce.descripcion or '').lower()
+                if 'no respondió' in obs or 'no respondio' in obs or 'no se presentó' in obs or 'no se presento' in obs or 'ausen' in obs:
+                    motivos_conteo['Paciente no se presentó'] += 1
+                elif 'retiró' in obs or 'retiro' in obs or 'mostrador' in obs or 'sala' in obs:
+                    motivos_conteo['Se retiró del establecimiento'] += 1
+                elif 'ayuno' in obs or 'posterg' in obs or 'indicaci' in obs:
+                    motivos_conteo['Falta de ayuno / indicación'] += 1
+                elif 'error' in obs or 'dni' in obs or 'tótem' in obs or 'totem' in obs or 'carga' in obs:
+                    motivos_conteo['Error de carga / DNI erróneo'] += 1
+                else:
+                    motivos_conteo['Otro'] += 1
+            tot = max(sum(motivos_conteo.values()), 1)
+            res = []
+            for m_label, m_count in motivos_conteo.items():
+                if m_count > 0 or m_label in ['Paciente no se presentó', 'Se retiró del establecimiento', 'Falta de ayuno / indicación']:
+                    pct = max(4, int((m_count / tot) * 100)) if m_count > 0 else 4
+                    res.append({
+                        'label': m_label,
+                        'n': m_count,
+                        'w': f"{pct}%"
+                    })
+            return res
+
+        canc_admision = []
+        canc_box = []
+        for ce in canc_eventos:
+            sec = (ce.metadata or {}).get('sector')
+            cat = getattr(ce, 'categoria', '')
+            rol = getattr(ce, 'rol_usuario', '')
+            u_rol = getattr(ce.usuario, 'rol', '') if ce.usuario else ''
+            if sec == 'admision' or cat == 'admision' or rol == 'Admision' or u_rol == 'Admision':
+                canc_admision.append(ce)
+            else:
+                canc_box.append(ce)
+
+        motivos_general = calcular_motivos(canc_eventos)
+        motivos_admision = calcular_motivos(canc_admision)
+        motivos_box = calcular_motivos(canc_box)
+
+        cancelaciones_por_motivo = motivos_general
+        cancelaciones_desglose = {
+            'general': motivos_general,
+            'admision': motivos_admision,
+            'box': motivos_box,
+            'totales': {
+                'general': len(canc_eventos),
+                'admision': len(canc_admision),
+                'box': len(canc_box)
+            }
+        }
 
         # Feed reciente (últimos 20 eventos según filtro aplicado)
         feed_source = qs_feed if qs_feed is not None else queryset
@@ -620,6 +652,7 @@ class AuditService:
             'alertas_recientes': alertas_recientes[:8],
             'actividad_por_hora': actividad_por_hora,
             'cancelaciones_por_motivo': cancelaciones_por_motivo,
+            'cancelaciones_desglose': cancelaciones_desglose,
             'feed_reciente': feed_reciente
         }
 
