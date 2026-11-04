@@ -594,10 +594,10 @@ class ReportPdfGenerator:
         el.append(cls._tabla(datos, [130, 131, 131, 131]))
         el.append(Spacer(1, 10))
 
-        # CORRECCIÓN: Evitar tomar los estudios cancelados de la auditoría
+        # CORRECCIÓN: Usar los valores correctos de pacientes/tickets cancelados
         total_canc_adm = metricas.get('total_cancelados_admision', 0)
-        total_canc_box = metricas.get('total_cancelados_box', 0)
-        total_canc = metricas.get('total_cancelados', 0)
+        total_canc_box_tickets = metricas.get('total_cancelados_box', 0)  # Tickets cancelados en box
+        total_canc = metricas.get('total_cancelados', 0)                  # Total global real (Admisión + Box)
         tasa_deserc = metricas.get('tasa_desercion_porcentaje', 0.0)
 
         el.append(cls._seccion("Auditoría de cancelaciones y ausencias", est))
@@ -606,13 +606,13 @@ class ReportPdfGenerator:
             [Paragraph("Cancelados en admisión", est['th_der']), Paragraph("Cancelados en box", est['th_der']),
              Paragraph("Total ausentes / deserciones", est['th_der']), Paragraph("Tasa de deserción global", est['th_der'])],
             [Paragraph(_n(total_canc_adm), est['celda_der']),
-             Paragraph(_n(total_canc_box), est['celda_der']),
+             Paragraph(_n(total_canc_box_tickets), est['celda_der']),
              Paragraph(f"<font color='#B91C1C'><b>{_n(total_canc)}</b></font>", est['celda_der']),
              Paragraph(f"<b>{_dec(tasa_deserc)}%</b>", est['celda_der'])],
         ]
         el.append(cls._tabla(datos_canc, [130, 131, 131, 131]))
         el.append(Spacer(1, 12))
-
+        
         nota_anexo = Table([[Paragraph(
             "Las páginas siguientes (anexo) incluyen el resumen por sección, insumos, el detalle de prácticas "
             "y el rendimiento del personal.", est['nota'])]], colWidths=[ANCHO_UTIL])
