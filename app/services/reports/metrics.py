@@ -534,7 +534,7 @@ class ReportMetricsService:
             'total_criticos_atendidos': total_criticos_atendidos,
             'total_cancelados': total_cancelados,
             'total_cancelados_admision': total_cancelados_admision,
-            'total_cancelados_box': total_cancelados_box,
+            'total_cancelados_box': total_cancelados_box, # Tickets/pacientes cancelados en box (ej. 8)
             'total_en_curso': total_en_curso,
             'tasa_completitud_porcentaje': tasa_completitud,
             'tasa_desercion_porcentaje': tasa_desercion,
