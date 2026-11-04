@@ -190,15 +190,17 @@ class ReportMetricsService:
         # ==============================================================================
         # 3. DISTRIBUCIÓN Y SLA DE TRIAGE
         # ==============================================================================
+        # Filtrar estrictamente solo pacientes FINALIZADOS (atendidos)
         triage_counts = dict(
-            tickets_dia.values('clasificacion_triage')
+            tickets_dia.filter(estado=EstadoTicket.FINALIZADO)
+            .values('clasificacion_triage')
             .annotate(cantidad=Count('pk'))
             .values_list('clasificacion_triage', 'cantidad')
         )
-        # Sumar los turnos de recepción cancelados en admisión según su categoría del tótem
-        for turno in turnos_cancelados_admision_qs:
-            cat_triage = MAPEO_PREFIJO_A_TRIAGE.get(turno.prefijo, ClasificacionTriage.OTRO)
-            triage_counts[cat_triage] = triage_counts.get(cat_triage, 0) + 1
+        
+        # Eliminamos el bucle for que sumaba los turnos cancelados, 
+        # ya que ahora la gráfica es exclusiva de pacientes efectivos.
+
         mapa_triage_display = dict(ClasificacionTriage.choices)
         distribucion_triage = []
         sla_triage = []
@@ -212,7 +214,8 @@ class ReportMetricsService:
                 distribucion_triage.append({
                     'clasificacion_triage': triage_key,
                     'cantidad': cant,
-                    'porcentaje': round((cant / total_emitidos) * 100, 1) if total_emitidos > 0 else 0.0
+                    # El porcentaje ahora se calcula sobre el total de ATENDIDOS
+                    'porcentaje': round((cant / total_atendidos) * 100, 1) if total_atendidos > 0 else 0.0
                 })
             # SLA de espera
             esperas_cat = espera_por_triage.get(triage_key, [])
@@ -226,7 +229,7 @@ class ReportMetricsService:
             })
 
         distribucion_triage.sort(key=lambda x: x['cantidad'], reverse=True)
-
+        
         # ==============================================================================
         # 4. SEGMENTACIÓN POR FRANJAS HORARIAS HOSPITALARIAS
         # ==============================================================================
@@ -496,7 +499,7 @@ class ReportMetricsService:
         auditoria_box: Dict[str, Any] = {
             'total_cargados_admision': total_cargados_admision,
             'total_agregados_box': total_agregados_box,
-            'total_cancelados_box': total_cancelados_box,
+            'total_cancelados_box': tickets_dia.filter(estado=EstadoTicket.CANCELADO).count(), # Número real de pacientes
             'total_cancelados_admision': total_cancelados_admision,
             'tasa_rectificacion_porcentaje': tasa_rectificacion,
             'motivos_cancelacion': motivos_cancelacion,
@@ -618,8 +621,10 @@ class ReportMetricsService:
                 .order_by('-pacientes_atendidos')
             )
 
-            # NUEVO: Lista nominal de pacientes cancelados
+            # NUEVO: Lista nominal de pacientes cancelados (Admisión y Box)
             pacientes_cancelados_lista = []
+            
+            # Cancelados en Box (Tickets)
             tickets_cancelados = tickets_dia.filter(estado=EstadoTicket.CANCELADO).select_related('paciente', 'personal_admision')
             for t in tickets_cancelados:
                 pacientes_cancelados_lista.append({
@@ -627,7 +632,19 @@ class ReportMetricsService:
                     'paciente': f"{t.paciente.apellidos}, {t.paciente.nombre}" if t.paciente else "Sin registrar",
                     'dni': t.paciente.dni if t.paciente else "—",
                     'hora_admision': timezone.localtime(t.fecha_hora_admision).strftime('%H:%M:%S') if t.fecha_hora_admision else "—",
-                    'operador': f"{t.personal_admision.apellidos}, {t.personal_admision.nombre}" if t.personal_admision else "Tótem Automático"
+                    'operador': f"{t.personal_admision.apellidos}, {t.personal_admision.nombre}" if t.personal_admision else "Tótem Automático",
+                    'origen_cancelacion': 'Box'
+                })
+                
+            # Cancelados en Admisión (Turnos de recepción)
+            for tc in turnos_cancelados_admision_qs:
+                pacientes_cancelados_lista.append({
+                    'num_totem': tc.numero_llamado,
+                    'paciente': "Sin registrar (Ausente en mostrador)",
+                    'dni': tc.dni or "—",
+                    'hora_admision': timezone.localtime(tc.created_at).strftime('%H:%M:%S') if tc.created_at else "—",
+                    'operador': "—",
+                    'origen_cancelacion': 'Admisión'
                 })
 
             resultado.update({
