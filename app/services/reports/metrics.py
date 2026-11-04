@@ -229,7 +229,7 @@ class ReportMetricsService:
             })
 
         distribucion_triage.sort(key=lambda x: x['cantidad'], reverse=True)
-        
+
         # ==============================================================================
         # 4. SEGMENTACIÓN POR FRANJAS HORARIAS HOSPITALARIAS
         # ==============================================================================
@@ -471,10 +471,13 @@ class ReportMetricsService:
         ticket_estudios_efectivos_dia = ticket_estudios_dia.exclude(ticket__estado=EstadoTicket.CANCELADO)
         total_cargados_admision = ticket_estudios_efectivos_dia.filter(origen=OrigenEstudio.ADMISION).count()
         total_agregados_box = ticket_estudios_efectivos_dia.filter(origen=OrigenEstudio.BOX).count()
-        total_cancelados_box = ticket_estudios_efectivos_dia.filter(estado=EstadoEstudio.CANCELADO).count()
+        
+        # CORRECCIÓN: Cambiamos el nombre de la variable a "estudios_cancelados_box" 
+        # para que no sobrescriba a la métrica general de pacientes.
+        estudios_cancelados_box = ticket_estudios_efectivos_dia.filter(estado=EstadoEstudio.CANCELADO).count()
 
         tasa_rectificacion = (
-            round(((total_agregados_box + total_cancelados_box) / total_cargados_admision) * 100, 1)
+            round(((total_agregados_box + estudios_cancelados_box) / total_cargados_admision) * 100, 1)
             if total_cargados_admision > 0 else 0.0
         )
 
@@ -499,7 +502,7 @@ class ReportMetricsService:
         auditoria_box: Dict[str, Any] = {
             'total_cargados_admision': total_cargados_admision,
             'total_agregados_box': total_agregados_box,
-            'total_cancelados_box': tickets_dia.filter(estado=EstadoTicket.CANCELADO).count(), # Número real de pacientes
+            'total_cancelados_box': estudios_cancelados_box, # Guardamos el valor de estudios (3) solo para esta sección
             'total_cancelados_admision': total_cancelados_admision,
             'tasa_rectificacion_porcentaje': tasa_rectificacion,
             'motivos_cancelacion': motivos_cancelacion,
