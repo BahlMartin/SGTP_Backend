@@ -728,15 +728,15 @@ class ReportPdfGenerator:
             datos.append([Paragraph("Sin atenciones registradas en box", est['celda']), '', '', '', '', ''])
         el.append(cls._tabla(datos, [125, 60, 133, 55, 55, 95]))
         ###
-        # NUEVO: Tabla de pacientes cancelados
+        # NUEVO: Tabla de pacientes ausentes
         el.append(Spacer(1, 16))
-        el.append(Paragraph("<b>Pacientes cancelados en box</b> (retiro o ausencia)", est['celda']))
+        el.append(Paragraph("<b>Pacientes ausentes</b>", est['celda']))
         el.append(Spacer(1, 4))
         
         datos_canc_box = [[
             Paragraph("N° Ticket", est['th']), Paragraph("Paciente", est['th']),
             Paragraph("DNI", est['th']), Paragraph("Hora", est['th']),
-            Paragraph("Operador Adm.", est['th'])
+            Paragraph("Operador Adm.", est['th']), Paragraph("Cancelado en", est['th'])
         ]]
         
         for pc in metricas.get('pacientes_cancelados_lista', []):
@@ -746,14 +746,20 @@ class ReportPdfGenerator:
                 Paragraph(_esc(pc['dni']), est['celda']),
                 Paragraph(_esc(pc['hora_admision']), est['celda']),
                 Paragraph(_esc(pc['operador']), est['celda']),
+                Paragraph(_esc(pc['origen_cancelacion']), est['celda']),
             ])
             
         if len(datos_canc_box) == 1:
-            datos_canc_box.append([Paragraph("Sin pacientes cancelados", est['celda']), '', '', '', ''])
+            datos_canc_box.append([Paragraph("Sin pacientes ausentes", est['celda']), '', '', '', '', ''])
             
-        # Los números son el ancho en puntos de cada columna
-        el.append(cls._tabla(datos_canc_box, [60, 178, 65, 50, 130]))
-        
+        # Ajuste de anchos para incluir la sexta columna (total: 523 puntos)
+        el.append(cls._tabla(datos_canc_box, [45, 155, 60, 45, 110, 88]))
+
+        doc.build(el, onFirstPage=encabezado, onLaterPages=encabezado, canvasmaker=NumberedCanvas)
+        pdf_bytes = buffer.getvalue()
+        buffer.close()
+        return pdf_bytes
+
         doc.build(el, onFirstPage=encabezado, onLaterPages=encabezado, canvasmaker=NumberedCanvas)
         pdf_bytes = buffer.getvalue()
         buffer.close()
