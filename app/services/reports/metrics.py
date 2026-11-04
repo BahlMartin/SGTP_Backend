@@ -562,7 +562,13 @@ class ReportMetricsService:
                 .order_by('-pacientes_recepcionados')
             )
             for p in rendimiento_admision:
-                p['nombre_completo'] = f"{p['personal_admision__apellidos']}, {p['personal_admision__nombre']}"
+                # CORRECCIÓN: Contabilizar los tickets del Tótem automático
+                if p['personal_admision__id_personal']:
+                    p['nombre_completo'] = f"{p['personal_admision__apellidos']}, {p['personal_admision__nombre']}"
+                else:
+                    p['nombre_completo'] = "Tótem Automático / Autogestión"
+                    p['personal_admision__matricula'] = "N/A"
+                    p['personal_admision__email'] = "autogestion@sgtp.com"
 
             rendimiento_box_raw = list(
                 asignaciones_dia.values(
@@ -612,10 +618,23 @@ class ReportMetricsService:
                 .order_by('-pacientes_atendidos')
             )
 
+            # NUEVO: Lista nominal de pacientes cancelados
+            pacientes_cancelados_lista = []
+            tickets_cancelados = tickets_dia.filter(estado=EstadoTicket.CANCELADO).select_related('paciente', 'personal_admision')
+            for t in tickets_cancelados:
+                pacientes_cancelados_lista.append({
+                    'num_totem': t.num_totem,
+                    'paciente': f"{t.paciente.apellidos}, {t.paciente.nombre}" if t.paciente else "Sin registrar",
+                    'dni': t.paciente.dni if t.paciente else "—",
+                    'hora_admision': timezone.localtime(t.fecha_hora_admision).strftime('%H:%M:%S') if t.fecha_hora_admision else "—",
+                    'operador': f"{t.personal_admision.apellidos}, {t.personal_admision.nombre}" if t.personal_admision else "Tótem Automático"
+                })
+
             resultado.update({
                 'rendimiento_admision': rendimiento_admision,
                 'rendimiento_box': rendimiento_box,
                 'rendimiento_personal': rendimiento_personal,
+                'pacientes_cancelados_lista': pacientes_cancelados_lista, # Lo pasamos al reporte
             })
 
         if not incluir_detalle_excel:
