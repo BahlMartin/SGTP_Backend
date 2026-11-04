@@ -594,8 +594,9 @@ class ReportPdfGenerator:
         el.append(cls._tabla(datos, [130, 131, 131, 131]))
         el.append(Spacer(1, 10))
 
-        total_canc_adm = metricas.get('total_cancelados_admision', auditoria.get('total_cancelados_admision', 0))
-        total_canc_box = metricas.get('total_cancelados_box', auditoria.get('total_cancelados_box', 0))
+        # CORRECCIÓN: Evitar tomar los estudios cancelados de la auditoría
+        total_canc_adm = metricas.get('total_cancelados_admision', 0)
+        total_canc_box = metricas.get('total_cancelados_box', 0)
         total_canc = metricas.get('total_cancelados', 0)
         tasa_deserc = metricas.get('tasa_desercion_porcentaje', 0.0)
 
@@ -726,7 +727,33 @@ class ReportPdfGenerator:
         if len(datos) == 1:
             datos.append([Paragraph("Sin atenciones registradas en box", est['celda']), '', '', '', '', ''])
         el.append(cls._tabla(datos, [125, 60, 133, 55, 55, 95]))
-
+        ###
+        # NUEVO: Tabla de pacientes cancelados
+        el.append(Spacer(1, 16))
+        el.append(Paragraph("<b>Pacientes cancelados en box</b> (retiro o ausencia)", est['celda']))
+        el.append(Spacer(1, 4))
+        
+        datos_canc_box = [[
+            Paragraph("N° Ticket", est['th']), Paragraph("Paciente", est['th']),
+            Paragraph("DNI", est['th']), Paragraph("Hora", est['th']),
+            Paragraph("Operador Adm.", est['th'])
+        ]]
+        
+        for pc in metricas.get('pacientes_cancelados_lista', []):
+            datos_canc_box.append([
+                Paragraph(_esc(pc['num_totem']), est['celda']),
+                Paragraph(f"<b>{_esc(pc['paciente'])}</b>", est['celda']),
+                Paragraph(_esc(pc['dni']), est['celda']),
+                Paragraph(_esc(pc['hora_admision']), est['celda']),
+                Paragraph(_esc(pc['operador']), est['celda']),
+            ])
+            
+        if len(datos_canc_box) == 1:
+            datos_canc_box.append([Paragraph("Sin pacientes cancelados", est['celda']), '', '', '', ''])
+            
+        # Los números son el ancho en puntos de cada columna
+        el.append(cls._tabla(datos_canc_box, [60, 178, 65, 50, 130]))
+        
         doc.build(el, onFirstPage=encabezado, onLaterPages=encabezado, canvasmaker=NumberedCanvas)
         pdf_bytes = buffer.getvalue()
         buffer.close()
