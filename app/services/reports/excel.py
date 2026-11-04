@@ -598,8 +598,8 @@ class ReportExcelGenerator:
             mensaje_vacio="Sin actividad en boxes físicos durante la jornada."
         )
         
-        # 4. Listado Nominal de Pacientes Cancelados en Box
-        fila = cls._agregar_titulo_seccion(ws, fila, "4. Listado Nominal de Pacientes Cancelados en Box", max_cols=7)
+        # 4. Listado Nominal de Pacientes Ausentes
+        fila = cls._agregar_titulo_seccion(ws, fila, "4. Listado Nominal de Pacientes Ausentes", max_cols=8)
         
         filas_canc_box = [
             (
@@ -608,6 +608,7 @@ class ReportExcelGenerator:
                 pc.get('dni', '—'),
                 pc.get('hora_admision', '—'),
                 pc.get('operador', '—'),
+                pc.get('origen_cancelacion', '—'),
             )
             for pc in m.get('pacientes_cancelados_lista', [])
         ]
@@ -615,10 +616,10 @@ class ReportExcelGenerator:
         fila = cls._agregar_tabla(
             ws,
             fila,
-            ["N° Ticket", "Paciente", "DNI", "Hora Admisión", "Operador de Admisión"],
+            ["N° Ticket", "Paciente", "DNI", "Hora Admisión", "Operador de Admisión", "Cancelado en"],
             filas_canc_box,
-            alineaciones=['C', 'L', 'C', 'C', 'L'],
-            mensaje_vacio="Sin pacientes cancelados registrados en la jornada."
+            alineaciones=['C', 'L', 'C', 'C', 'L', 'C'],
+            mensaje_vacio="Sin pacientes ausentes registrados en la jornada."
         )
 
         cls._autoajustar_columnas(ws)
@@ -1007,4 +1008,3 @@ class ReportExcelGenerator:
 
 
 __all__ = ['ReportExcelGenerator']
-
