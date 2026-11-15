@@ -211,6 +211,44 @@ class OCRIntegrationService:
             return img
         return ''
 
+    @staticmethod
+    def _extraer_vhash(imagen_o_firma: Any) -> str:
+        """Extrae la huella visual perceptual (16-20 hex) desde un parámetro `;vhash=...;` o string directo."""
+        if not isinstance(imagen_o_firma, str):
+            return ''
+        valor = imagen_o_firma.strip()
+        if not valor:
+            return ''
+        m = re.search(r'vhash=([0-9a-fA-F]{16,20})', valor)
+        if m:
+            return m.group(1).lower()
+        if valor.lower().startswith('vhash '):
+            valor = valor[6:].strip()
+        if re.fullmatch(r'[0-9a-fA-F]{16,20}', valor):
+            return valor.lower()
+        return ''
+
+    @classmethod
+    def calcular_similitud_visual(cls, vhash_a: str, vhash_b: str) -> float:
+        """Compara dos huellas visuales dHash + bucket de aspecto retornando similitud entre 0 y 100."""
+        ha = cls._extraer_vhash(vhash_a)
+        hb = cls._extraer_vhash(vhash_b)
+        if len(ha) < 16 or len(hb) < 16:
+            return 0.0
+
+        xor_val = int(ha[:16], 16) ^ int(hb[:16], 16)
+        diff_bits = bin(xor_val).count('1')
+        score = ((64 - diff_bits) / 64.0) * 100.0
+
+        if len(ha) >= 18 and len(hb) >= 18:
+            ar_a = max(1, int(ha[16:18], 16))
+            ar_b = max(1, int(hb[16:18], 16))
+            ratio_diff = abs(ar_a - ar_b) / float(max(ar_a, ar_b))
+            if ratio_diff > 0.35:
+                score -= min(25.0, (ratio_diff - 0.35) * 45.0)
+
+        return round(max(0.0, min(100.0, score)), 2)
+
     @classmethod
     def _buscar_mejor_combo_para_texto(
         cls,
@@ -252,17 +290,24 @@ class OCRIntegrationService:
         estudios_activos: List[Estudios],
         textos_descartados_globales: Set[str],
         pares_descartados: Set[Tuple[str, int]],
-        umbral_similitud: float = 75.0
+        umbral_similitud: float = 75.0,
+        firma_visual: str = ''
     ) -> Dict[str, Any]:
         """
-        Evalúa un único renglón detectado por OCR contra:
+        Evalúa un único renglón o bloque detectado por OCR contra:
         1. Filtro de ruido aprendido (renglones descartados por el personal).
-        2. Baterías/Combos (PerfilEstudioPatron).
-        3. Alias aprendidos (EstudioAliasAprendido) con coincidencia exacta y fuzzy ponderada.
+        2. Baterías/Combos (PerfilEstudioPatron) por texto o huella visual.
+        3. Alias aprendidos (EstudioAliasAprendido) por texto y similitud visual de trazo.
         4. Catálogo maestro (Estudios) + diccionario clínico sobre el renglón y sus sub-segmentos.
         """
         texto_norm = normalizar_texto_clinico(raw_texto)
-        if not texto_norm or texto_norm in textos_descartados_globales:
+        es_manuscrito_sin_texto = (
+            str(raw_texto or '').strip().lower() == '[manuscrito a revisar]'
+            or texto_norm == 'manuscrito a revisar'
+        )
+        firma_norm = cls._extraer_vhash(firma_visual)
+
+        if not es_manuscrito_sin_texto and (not texto_norm or texto_norm in textos_descartados_globales):
             return {
                 'indice': indice,
                 'texto_renglon': raw_texto,
@@ -318,8 +363,27 @@ class OCRIntegrationService:
                 if prev_seg is None or score > prev_seg[1]:
                     mejor_por_segmento[segmento_key] = (estudio.id, score)
 
-        # Paso 1: Baterías / Combos (PerfilEstudioPatron)
-        patron_combo, _ = cls._buscar_mejor_combo_para_texto(texto_norm, patrones_activos)
+        # Paso 1: Baterías / Combos (PerfilEstudioPatron) por texto y respaldo por huella visual
+        patron_combo = None
+        score_combo = 100.0
+        if not es_manuscrito_sin_texto:
+            patron_combo, _ = cls._buscar_mejor_combo_para_texto(texto_norm, patrones_activos)
+
+        if not patron_combo and firma_norm:
+            mejor_combo_visual = None
+            mejor_score_visual = 0.0
+            for patron in patrones_activos:
+                vhash_patron = cls._extraer_vhash(patron.imagen_muestra)
+                if not vhash_patron:
+                    continue
+                sv = cls.calcular_similitud_visual(firma_norm, vhash_patron)
+                if sv >= 84.0 and sv > mejor_score_visual:
+                    mejor_score_visual = sv
+                    mejor_combo_visual = patron
+            if mejor_combo_visual:
+                patron_combo = mejor_combo_visual
+                score_combo = round(mejor_score_visual, 2)
+
         if patron_combo:
             combo_detectado = patron_combo.nombre_perfil
             imagen_muestra_conocida = patron_combo.imagen_muestra or ''
@@ -328,26 +392,28 @@ class OCRIntegrationService:
                 if est and (texto_norm, est.id) not in pares_descartados:
                     _registrar_candidato(
                         estudio=est,
-                        score=100.0,
+                        score=score_combo,
                         origen='COMBO_RUTINA',
                         veces_confirmado=patron_combo.frecuencia_uso,
                         imagen_muestra=patron_combo.imagen_muestra or '',
                         preseleccionado=True
                     )
 
-        # Paso 2: Sub-segmentos y Alias Aprendidos (EstudioAliasAprendido)
-        sub_segmentos = cls._dividir_subsegmentos(raw_texto)
-        segmentos_evaluar = [raw_texto]
-        if len(sub_segmentos) > 1:
-            segmentos_evaluar.extend(sub_segmentos)
-
-        segmentos_norm_vistos: Set[str] = set()
+        # Paso 2: Sub-segmentos y Alias Aprendidos (EstudioAliasAprendido) por texto y trazo visual
+        sub_segmentos: List[str] = []
         segmentos_con_norm: List[Tuple[str, str]] = []
-        for seg in segmentos_evaluar:
-            seg_norm = normalizar_texto_clinico(seg)
-            if len(seg_norm) >= 2 and seg_norm not in segmentos_norm_vistos:
-                segmentos_norm_vistos.add(seg_norm)
-                segmentos_con_norm.append((seg, seg_norm))
+        if not es_manuscrito_sin_texto:
+            sub_segmentos = cls._dividir_subsegmentos(raw_texto)
+            segmentos_evaluar = [raw_texto]
+            if len(sub_segmentos) > 1:
+                segmentos_evaluar.extend(sub_segmentos)
+
+            segmentos_norm_vistos: Set[str] = set()
+            for seg in segmentos_evaluar:
+                seg_norm = normalizar_texto_clinico(seg)
+                if len(seg_norm) >= 2 and seg_norm not in segmentos_norm_vistos:
+                    segmentos_norm_vistos.add(seg_norm)
+                    segmentos_con_norm.append((seg, seg_norm))
 
         for _, seg_norm in segmentos_con_norm:
             for alias in alias_activos:
@@ -362,12 +428,20 @@ class OCRIntegrationService:
                     continue
 
                 score_alias = 0.0
-                if seg_norm == patron_norm or (len(patron_norm) >= 4 and patron_norm in seg_norm):
-                    score_alias = 100.0
-                elif len(seg_norm) >= 3 and len(patron_norm) >= 3:
-                    ratio = max(fuzz.ratio(seg_norm, patron_norm), fuzz.token_set_ratio(seg_norm, patron_norm))
-                    if ratio >= 78:
-                        score_alias = min(100.0, round(ratio + min(12.0, alias.veces_confirmado * 2.5), 2))
+                if not patron_norm.startswith('vhash '):
+                    if seg_norm == patron_norm or (len(patron_norm) >= 4 and patron_norm in seg_norm):
+                        score_alias = 100.0
+                    elif len(seg_norm) >= 3 and len(patron_norm) >= 3:
+                        ratio = max(fuzz.ratio(seg_norm, patron_norm), fuzz.token_set_ratio(seg_norm, patron_norm))
+                        if ratio >= 78:
+                            score_alias = min(100.0, round(ratio + min(12.0, alias.veces_confirmado * 2.5), 2))
+
+                if firma_norm:
+                    vhash_alias = cls._extraer_vhash(alias.imagen_muestra) or cls._extraer_vhash(alias.texto_patron)
+                    if vhash_alias:
+                        score_visual = cls.calcular_similitud_visual(firma_norm, vhash_alias)
+                        if score_visual >= 82.0:
+                            score_alias = max(score_alias, round(score_visual, 2))
 
                 if score_alias > 0.0:
                     img_alias = alias.imagen_muestra or ''
@@ -381,6 +455,28 @@ class OCRIntegrationService:
                         imagen_muestra=img_alias,
                         preseleccionado=(score_alias >= 85.0),
                         segmento_key=seg_norm if len(sub_segmentos) > 1 and seg_norm != texto_norm else ''
+                    )
+
+        if es_manuscrito_sin_texto and firma_norm:
+            for alias in alias_activos:
+                estudio = alias.estudio
+                if not estudio or not estudio.activo:
+                    continue
+                vhash_alias = cls._extraer_vhash(alias.imagen_muestra) or cls._extraer_vhash(alias.texto_patron)
+                if not vhash_alias:
+                    continue
+                score_visual = cls.calcular_similitud_visual(firma_norm, vhash_alias)
+                if score_visual >= 82.0:
+                    img_alias = alias.imagen_muestra or ''
+                    if img_alias and not imagen_muestra_conocida:
+                        imagen_muestra_conocida = img_alias
+                    _registrar_candidato(
+                        estudio=estudio,
+                        score=round(score_visual, 2),
+                        origen='MEMORIA_APRENDIDA',
+                        veces_confirmado=alias.veces_confirmado,
+                        imagen_muestra=img_alias,
+                        preseleccionado=(score_visual >= 85.0)
                     )
 
         # Paso 3: Catálogo Maestro (Estudios) + Diccionario Nuclear
@@ -646,13 +742,14 @@ class OCRIntegrationService:
     def mapear_textos_con_estudios(
         cls,
         textos_detectados: List[str],
-        umbral_similitud: int = None
+        umbral_similitud: int = None,
+        firmas_visuales: List[str] = None
     ) -> Dict[str, Any]:
         """
         Orquesta el pipeline completo de mapeo renglón por renglón:
         1. Filtro de ruido aprendido.
-        2. Baterías de Rutina (Combos por IDs).
-        3. Memoria Adaptativa de abreviaturas (exacta y fuzzy ponderada por frecuencia).
+        2. Baterías de Rutina (Combos por IDs) por texto y huella visual.
+        3. Memoria Adaptativa de abreviaturas (exacta, fuzzy ponderada y similitud visual de trazo).
         4. Fuzzy matching sobre catálogo maestro y sub-segmentos.
         5. Desambiguación contextual (Boosting).
         6. Sugerencias complementarias de co-ocurrencia.
@@ -669,8 +766,15 @@ class OCRIntegrationService:
         if umbral_similitud is None:
             umbral_similitud = getattr(settings, 'OCR_SIMILARITY_THRESHOLD', 75)
 
-        textos_limpios = [str(t).strip() for t in textos_detectados if len(str(t).strip()) >= 2]
-        if not textos_limpios:
+        firmas_lista = list(firmas_visuales) if isinstance(firmas_visuales, list) else []
+        textos_con_firma: List[Tuple[str, str]] = []
+        for i, t in enumerate(textos_detectados):
+            limpio = str(t).strip()
+            if len(limpio) >= 2:
+                firma_i = str(firmas_lista[i]).strip() if i < len(firmas_lista) else ''
+                textos_con_firma.append((limpio, firma_i))
+
+        if not textos_con_firma:
             return {
                 'sugerencias': [],
                 'total_sugerencias': 0,
@@ -708,7 +812,7 @@ class OCRIntegrationService:
         estudios_activos = list(Estudios.objects.filter(activo=True))
 
         renglones: List[Dict[str, Any]] = []
-        for idx, raw_texto in enumerate(textos_limpios):
+        for idx, (raw_texto, firma_visual) in enumerate(textos_con_firma):
             renglon_eval = cls.evaluar_renglon_individual(
                 indice=idx,
                 raw_texto=raw_texto,
@@ -717,7 +821,8 @@ class OCRIntegrationService:
                 estudios_activos=estudios_activos,
                 textos_descartados_globales=textos_descartados_globales,
                 pares_descartados=pares_descartados,
-                umbral_similitud=float(umbral_similitud)
+                umbral_similitud=float(umbral_similitud),
+                firma_visual=firma_visual
             )
             renglones.append(renglon_eval)
 
@@ -873,9 +978,18 @@ class OCRIntegrationService:
         patrones_activos = list(PerfilEstudioPatron.objects.filter(activo=True))
         for item in renglones_confirmados:
             raw_t = item.get('texto', '')
-            texto_norm = normalizar_texto_clinico(raw_t)
-            if len(texto_norm) < 2:
-                continue
+            imagen_str = cls._limpiar_imagen_muestra(item.get('imagen_muestra'))
+            vhash_item = cls._extraer_vhash(imagen_str)
+            es_manuscrito_sin_texto = str(raw_t or '').strip().lower() == '[manuscrito a revisar]'
+
+            if es_manuscrito_sin_texto:
+                if not vhash_item:
+                    continue
+                texto_norm = f"vhash {vhash_item}"
+            else:
+                texto_norm = normalizar_texto_clinico(raw_t)
+                if len(texto_norm) < 2:
+                    continue
 
             est_ids_renglon: List[int] = []
             vistos_r: Set[int] = set()
@@ -888,8 +1002,6 @@ class OCRIntegrationService:
 
             if not est_ids_renglon:
                 continue
-
-            imagen_str = cls._limpiar_imagen_muestra(item.get('imagen_muestra'))
 
             if len(est_ids_renglon) == 1:
                 if cls._upsert_alias_aprendido(texto_norm, estudios_activos_map[est_ids_renglon[0]], imagen_str):
@@ -921,7 +1033,11 @@ class OCRIntegrationService:
                         update_fields.append('imagen_muestra')
                     patron_existente.save(update_fields=update_fields)
                 else:
-                    nombre_combo = f"Batería: {texto_norm[:130].title()}"
+                    nombre_combo = (
+                        f"Batería Visual: {vhash_item[:12]}"
+                        if es_manuscrito_sin_texto
+                        else f"Batería: {texto_norm[:130].title()}"
+                    )
                     patron_nuevo, created = PerfilEstudioPatron.objects.get_or_create(
                         nombre_perfil=nombre_combo,
                         defaults={
@@ -948,16 +1064,17 @@ class OCRIntegrationService:
                     patrones_activos.append(patron_nuevo)
 
                 total_baterias_actualizadas += 1
-                total_alias_actualizados += cls._asociar_subsegmentos_con_estudios(
-                    raw_texto=raw_t,
-                    estudios_ordenados=[estudios_activos_map[eid] for eid in est_ids_renglon],
-                    imagen_muestra=imagen_str
-                )
+                if not es_manuscrito_sin_texto:
+                    total_alias_actualizados += cls._asociar_subsegmentos_con_estudios(
+                        raw_texto=raw_t,
+                        estudios_ordenados=[estudios_activos_map[eid] for eid in est_ids_renglon],
+                        imagen_muestra=imagen_str
+                    )
 
-        # 2. Registrar líneas descartadas como ruido aprendido
+        # 2. Registrar líneas descartadas como ruido aprendido (nunca descartar el placeholder genérico)
         for linea_desc in lineas_descartadas:
             texto_norm = normalizar_texto_clinico(linea_desc)
-            if len(texto_norm) < 2:
+            if len(texto_norm) < 2 or texto_norm == 'manuscrito a revisar':
                 continue
 
             EstudioAliasAprendido.objects.filter(

@@ -307,3 +307,34 @@ class OCRIntegrationTestCase(TestCase):
         self.assertEqual(len(scan_data['renglones']), 1)
         self.assertEqual(scan_data['renglones'][0]['recomendados'][0]['id_estudio'], self.estudio_glucemia.id)
         self.assertEqual(scan_data['renglones'][0]['recomendados'][0]['imagen_muestra'], crop_webp)
+
+    def test_huella_visual_y_manuscrito_sin_texto(self):
+        """Valida aprendizaje y recuperación por huella visual (;vhash=...;) aunque el texto sea '[Manuscrito a revisar]'."""
+        crop_con_vhash = "data:image/webp;vhash=a5a55a5af0f00f0f28;base64,UklGRh4AAABXRUJQVlA4TBEAAAAvAAAAAAfQ//73v/+BiOh/AAA="
+
+        resp = OCRIntegrationService.registrar_retroalimentacion(
+            renglones_confirmados=[
+                {
+                    'texto': '[Manuscrito a revisar]',
+                    'estudios_ids': [self.estudio_hemo.id],
+                    'imagen_muestra': crop_con_vhash
+                }
+            ],
+            lineas_descartadas=['[Manuscrito a revisar]']
+        )
+        self.assertTrue(resp['success'])
+        self.assertEqual(resp['alias_procesados'], 1)
+        # El placeholder genérico nunca debe marcarse como ruido global
+        self.assertEqual(resp['descartados_procesados'], 0)
+
+        # Al re-escanear otro bloque sin texto legible con huella visual casi idéntica (1 bit distinto)
+        mapeo = OCRIntegrationService.mapear_textos_con_estudios(
+            ['[Manuscrito a revisar]'],
+            firmas_visuales=['a5a55a5af0f00f0e28']
+        )
+        renglon = mapeo['renglones'][0]
+        self.assertFalse(renglon['es_ruido_aprendido'])
+        self.assertTrue(any(
+            r['id_estudio'] == self.estudio_hemo.id and r['origen_deteccion'] == 'MEMORIA_APRENDIDA'
+            for r in renglon['recomendados']
+        ))

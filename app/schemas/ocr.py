@@ -15,6 +15,12 @@ class RecetaUploadSerializer(serializers.Serializer):
         required=False,
         help_text="Array de cadenas de texto extraídas por el OCR en cliente (Tesseract.js)."
     )
+    firmas_visuales = serializers.ListField(
+        child=serializers.CharField(allow_blank=True),
+        required=False,
+        default=list,
+        help_text="Huellas visuales perceptuales opcionales paralelas a cada renglón."
+    )
 
 
 class OCRScanRequestSerializer(RecetaUploadSerializer):

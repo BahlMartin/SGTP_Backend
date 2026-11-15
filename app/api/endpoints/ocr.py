@@ -40,6 +40,7 @@ class EscanearRecetaOCRView(APIView):
     def post(self, request: Request) -> Response:
         # 1. Modo Frontend OCR: Recepción de array de textos ya digitalizados
         textos = request.data.get('textos')
+        firmas_visuales = request.data.get('firmas_visuales')
         if textos is not None:
             if not isinstance(textos, list):
                 return Response(
@@ -47,7 +48,10 @@ class EscanearRecetaOCRView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            resultado = OCRIntegrationService.mapear_textos_con_estudios(textos)
+            resultado = OCRIntegrationService.mapear_textos_con_estudios(
+                textos,
+                firmas_visuales=firmas_visuales if isinstance(firmas_visuales, list) else None
+            )
             combo = resultado.get('combo_detectado')
             msg_combo = f" [Batería detectada: {combo}]" if combo else ""
 
