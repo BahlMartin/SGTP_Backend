@@ -70,6 +70,7 @@ class EscanearRecetaOCRView(APIView):
                     "total_sugerencias": resultado['total_sugerencias'],
                     "combo_detectado": combo,
                     "sugerencias": resultado['sugerencias'],
+                    "renglones": resultado.get('renglones', []),
                     "sugerencias_contextuales": resultado.get('sugerencias_contextuales', [])
                 },
                 status=status.HTTP_200_OK
@@ -145,7 +146,9 @@ class RetroalimentarOCRView(APIView):
         resultado = OCRIntegrationService.registrar_retroalimentacion(
             lineas_origen=data.get('lineas_origen', []),
             estudios_confirmados_ids=data.get('estudios_confirmados_ids', []),
-            asociaciones_directas=data.get('asociaciones_directas', [])
+            asociaciones_directas=data.get('asociaciones_directas', []),
+            renglones_confirmados=data.get('renglones_confirmados', []),
+            lineas_descartadas=data.get('lineas_descartadas', [])
         )
 
         AuditService.registrar_evento(
@@ -155,7 +158,9 @@ class RetroalimentarOCRView(APIView):
             descripcion='Corrección y retroalimentación activa de OCR',
             metadata={
                 'estudios_confirmados': len(data.get('estudios_confirmados_ids', [])),
-                'asociaciones_aprendidas': len(data.get('asociaciones_directas', []))
+                'asociaciones_aprendidas': len(data.get('asociaciones_directas', [])),
+                'renglones_confirmados': len(data.get('renglones_confirmados', [])),
+                'lineas_descartadas': len(data.get('lineas_descartadas', []))
             },
             request=request
         )

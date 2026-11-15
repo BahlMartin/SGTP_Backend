@@ -4,6 +4,10 @@ Tests de Integración OCR, Memoria Adaptativa, Combos por IDs y Coocurrencia.
 import io
 from unittest.mock import patch, MagicMock
 from django.test import TestCase
+from rest_framework.test import APIClient
+from rest_framework import status
+
+from app.models.user import Personal, RolPersonal
 from app.models.studies import (
     Estudios,
     TipoMuestra,
@@ -150,3 +154,156 @@ class OCRIntegrationTestCase(TestCase):
         ).first()
         self.assertIsNotNone(cooc)
         self.assertEqual(cooc.veces_juntos, 1)
+
+    def test_desglose_renglon_por_renglon(self):
+        """Valida que mapear_textos_con_estudios retorne el desglose estructurado renglón por renglón."""
+        resultado = OCRIntegrationService.mapear_textos_con_estudios([
+            "Hemograma - Glucemia",
+            "Orina comp",
+            "Texto sin coincidencia"
+        ])
+
+        self.assertIn('renglones', resultado)
+        renglones = resultado['renglones']
+        self.assertEqual(len(renglones), 3)
+
+        ids_renglon_0 = {r['id_estudio'] for r in renglones[0]['recomendados'] if r['preseleccionado']}
+        self.assertIn(self.estudio_hemo.id, ids_renglon_0)
+        self.assertIn(self.estudio_glucemia.id, ids_renglon_0)
+
+        ids_renglon_1 = {r['id_estudio'] for r in renglones[1]['recomendados'] if r['preseleccionado']}
+        self.assertIn(self.estudio_orina.id, ids_renglon_1)
+
+        self.assertEqual(renglones[2]['recomendados'], [])
+
+    def test_aprendizaje_renglon_individual_con_imagen_y_fuzzy(self):
+        """Valida que confirmar 1 estudio en un renglón guarde imagen_muestra y se recupere con fuzzy matching."""
+        crop_webp = "data:image/webp;base64,UklGRh4AAABXRUJQVlA4TBEAAAAvAAAAAAfQ//73v/+BiOh/AAA="
+        resp = OCRIntegrationService.registrar_retroalimentacion(
+            renglones_confirmados=[
+                {
+                    'texto': 'Citolgico completo',
+                    'estudios_ids': [self.estudio_hemo.id],
+                    'imagen_muestra': crop_webp
+                }
+            ]
+        )
+        self.assertTrue(resp['success'])
+        self.assertEqual(resp['alias_procesados'], 1)
+
+        alias = EstudioAliasAprendido.objects.filter(
+            texto_patron='citolgico completo',
+            estudio=self.estudio_hemo
+        ).first()
+        self.assertIsNotNone(alias)
+        self.assertEqual(alias.imagen_muestra, crop_webp)
+
+        # Buscar con un texto levemente distinto leído por OCR para validar fuzzy sobre memoria
+        mapeo = OCRIntegrationService.mapear_textos_con_estudios(["Citolgico complet"])
+        recs = mapeo['renglones'][0]['recomendados']
+        self.assertTrue(any(
+            r['id_estudio'] == self.estudio_hemo.id and r['origen_deteccion'] == 'MEMORIA_APRENDIDA' and r['preseleccionado']
+            for r in recs
+        ))
+
+    def test_aprendizaje_renglon_multiple_crea_bateria_con_imagen(self):
+        """Valida que confirmar múltiples estudios en un mismo renglón cree/refuerce una batería con imagen_muestra."""
+        crop_webp = "data:image/webp;base64,UklGRh4AAABXRUJQVlA4TBEAAAAvAAAAAAfQ//73v/+BiOh/AAA="
+        resp = OCRIntegrationService.registrar_retroalimentacion(
+            renglones_confirmados=[
+                {
+                    'texto': 'Control metabólico básico',
+                    'estudios_ids': [self.estudio_hemo.id, self.estudio_glucemia.id, self.estudio_orina.id],
+                    'imagen_muestra': crop_webp
+                }
+            ]
+        )
+        self.assertTrue(resp['success'])
+        self.assertEqual(resp['baterias_procesadas'], 1)
+
+        patron = PerfilEstudioPatron.objects.filter(
+            nombre_perfil__icontains='Control Metabolico Basico'
+        ).first()
+        self.assertIsNotNone(patron)
+        self.assertEqual(sorted(patron.estudios_ids), sorted([self.estudio_hemo.id, self.estudio_glucemia.id, self.estudio_orina.id]))
+        self.assertEqual(patron.imagen_muestra, crop_webp)
+
+        # Al volver a escanear esa frase, debe detectar la batería completa automáticamente
+        mapeo = OCRIntegrationService.mapear_textos_con_estudios(["Control metabólico básico"])
+        self.assertIsNotNone(mapeo['combo_detectado'])
+        ids_detectados = {s['id_estudio'] for s in mapeo['sugerencias']}
+        self.assertEqual(ids_detectados, {self.estudio_hemo.id, self.estudio_glucemia.id, self.estudio_orina.id})
+
+    def test_renglones_descartados_se_filtran_en_futuros_escaneos(self):
+        """Valida que los renglones descartados como ruido queden marcados y se filtren en próximos escaneos."""
+        EstudioAliasAprendido.objects.create(
+            texto_patron="obs obra social ioma",
+            estudio=self.estudio_orina,
+            estado_revision='APROBADO_AUTOMATICO'
+        )
+
+        resp = OCRIntegrationService.registrar_retroalimentacion(
+            lineas_descartadas=["Obs: Obra Social IOMA"]
+        )
+        self.assertTrue(resp['success'])
+        self.assertEqual(resp['descartados_procesados'], 1)
+
+        # El alias previo automático debe quedar penalizado como DESCARTADO
+        alias_prev = EstudioAliasAprendido.objects.get(texto_patron="obs obra social ioma", estudio=self.estudio_orina)
+        self.assertEqual(alias_prev.estado_revision, 'DESCARTADO')
+
+        # Al volver a escanear, el renglón debe marcarse es_ruido_aprendido=True sin sugerencias
+        mapeo = OCRIntegrationService.mapear_textos_con_estudios(["Obs: Obra Social IOMA"])
+        self.assertTrue(mapeo['renglones'][0]['es_ruido_aprendido'])
+        self.assertEqual(mapeo['renglones'][0]['recomendados'], [])
+        self.assertEqual(mapeo['total_sugerencias'], 0)
+
+    def test_busqueda_manual_encuentra_estudios_por_alias_aprendido_y_api(self):
+        """Valida que GET /app/studies/?search=... y /app/ocr/ usen los alias aprendidos y baterías."""
+        user = Personal.objects.create_user(
+            email='jefa_ocr@hospital.local',
+            password='Password123!',
+            nombre='Ana',
+            apellidos='Gomez',
+            dni=44556677,
+            rol=RolPersonal.JEFA
+        )
+        client = APIClient()
+        client.force_authenticate(user=user)
+
+        crop_webp = "data:image/webp;base64,UklGRh4AAABXRUJQVlA4TBEAAAAvAAAAAAfQ//73v/+BiOh/AAA="
+        feedback_resp = client.post(
+            '/app/ocr/retroalimentar/',
+            {
+                'renglones_confirmados': [
+                    {
+                        'texto': 'Curva de azucar basal',
+                        'estudios_ids': [self.estudio_glucemia.id],
+                        'imagen_muestra': crop_webp
+                    }
+                ]
+            },
+            format='json'
+        )
+        self.assertEqual(feedback_resp.status_code, status.HTTP_200_OK)
+
+        # Buscar manualmente por el alias aprendido "curva de azucar"
+        search_resp = client.get('/app/studies/?search=curva%20de%20azucar')
+        self.assertEqual(search_resp.status_code, status.HTTP_200_OK)
+        data = search_resp.json()
+        results = data if isinstance(data, list) else data.get('results', [])
+        ids_encontrados = [item['id'] for item in results]
+        self.assertIn(self.estudio_glucemia.id, ids_encontrados)
+
+        # Validar respuesta del endpoint de escaneo con renglones
+        scan_resp = client.post(
+            '/app/ocr/escanear-receta/',
+            {'textos': ['Curva de azucar basal']},
+            format='json'
+        )
+        self.assertEqual(scan_resp.status_code, status.HTTP_200_OK)
+        scan_data = scan_resp.json()
+        self.assertIn('renglones', scan_data)
+        self.assertEqual(len(scan_data['renglones']), 1)
+        self.assertEqual(scan_data['renglones'][0]['recomendados'][0]['id_estudio'], self.estudio_glucemia.id)
+        self.assertEqual(scan_data['renglones'][0]['recomendados'][0]['imagen_muestra'], crop_webp)

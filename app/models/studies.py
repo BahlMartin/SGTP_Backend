@@ -100,6 +100,8 @@ class EstudioAliasAprendido(models.Model):
     estudio = models.ForeignKey(
         Estudios,
         on_delete=models.CASCADE,
+        null=True,
+        blank=True,
         related_name='alias_aprendidos',
         verbose_name="Estudio Oficial Asociado"
     )
@@ -121,6 +123,12 @@ class EstudioAliasAprendido(models.Model):
         default='APROBADO_AUTOMATICO',
         verbose_name="Estado de Moderación"
     )
+    imagen_muestra = models.TextField(
+        blank=True,
+        null=True,
+        default='',
+        verbose_name="Recorte de Imagen del Renglón (Base64 WebP)"
+    )
     fecha_primer_registro = models.DateTimeField(auto_now_add=True)
     fecha_ultima_confirmacion = models.DateTimeField(auto_now=True)
 
@@ -132,7 +140,8 @@ class EstudioAliasAprendido(models.Model):
         ordering = ['-veces_confirmado', 'texto_patron']
 
     def __str__(self) -> str:
-        return f"'{self.texto_patron}' -> {self.estudio.nombre} (x{self.veces_confirmado})"
+        estudio_nombre = self.estudio.nombre if self.estudio else 'DESCARTADO'
+        return f"'{self.texto_patron}' -> {estudio_nombre} (x{self.veces_confirmado})"
 
 
 class PerfilEstudioPatron(models.Model):
@@ -166,6 +175,12 @@ class PerfilEstudioPatron(models.Model):
     es_oficial = models.BooleanField(
         default=False,
         verbose_name="Definido por Supervisión / Jefa"
+    )
+    imagen_muestra = models.TextField(
+        blank=True,
+        null=True,
+        default='',
+        verbose_name="Recorte de Imagen del Renglón (Base64 WebP)"
     )
     fecha_creacion = models.DateTimeField(auto_now_add=True)
     fecha_actualizacion = models.DateTimeField(auto_now=True)

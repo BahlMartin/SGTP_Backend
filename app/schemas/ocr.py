@@ -29,6 +29,19 @@ class OCRResultadoEstudioSerializer(serializers.Serializer):
     similitud_score = serializers.FloatField()
     texto_detectado_origen = serializers.CharField()
     origen_deteccion = serializers.CharField(required=False, allow_blank=True)
+    preseleccionado = serializers.BooleanField(required=False, default=True)
+    veces_confirmado = serializers.IntegerField(required=False, default=0)
+    imagen_muestra = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+
+
+class OCRRenglonMapeadoSerializer(serializers.Serializer):
+    indice = serializers.IntegerField()
+    texto_renglon = serializers.CharField()
+    texto_normalizado = serializers.CharField()
+    es_ruido_aprendido = serializers.BooleanField(default=False)
+    combo_detectado = serializers.CharField(allow_null=True, required=False)
+    imagen_muestra_conocida = serializers.CharField(allow_blank=True, allow_null=True, required=False)
+    recomendados = OCRResultadoEstudioSerializer(many=True)
 
 
 class OCRSugerenciaContextualSerializer(serializers.Serializer):
@@ -43,7 +56,17 @@ class OCRScanResponseSerializer(serializers.Serializer):
     total_sugerencias = serializers.IntegerField()
     combo_detectado = serializers.CharField(allow_null=True, required=False)
     sugerencias = OCRResultadoEstudioSerializer(many=True)
+    renglones = OCRRenglonMapeadoSerializer(many=True, required=False)
     sugerencias_contextuales = OCRSugerenciaContextualSerializer(many=True, required=False)
+
+
+class RenglonConfirmadoFeedbackSerializer(serializers.Serializer):
+    texto = serializers.CharField()
+    estudios_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        allow_empty=False
+    )
+    imagen_muestra = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
 
 class RetroalimentacionOCRSerializer(serializers.Serializer):
@@ -54,13 +77,26 @@ class RetroalimentacionOCRSerializer(serializers.Serializer):
     )
     estudios_confirmados_ids = serializers.ListField(
         child=serializers.IntegerField(),
-        required=True,
+        required=False,
+        default=list,
         help_text="Lista de IDs de estudios confirmados en el ticket asistencial"
     )
     asociaciones_directas = serializers.ListField(
         child=serializers.DictField(),
         required=False,
         help_text="Lista de pares { texto, estudio_id } para aprendizaje léxico directo"
+    )
+    renglones_confirmados = RenglonConfirmadoFeedbackSerializer(
+        many=True,
+        required=False,
+        default=list,
+        help_text="Renglones validados con sus estudios asignados e imagen recortada"
+    )
+    lineas_descartadas = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        default=list,
+        help_text="Renglones marcados por el personal como ruido / no estudio"
     )
 
 
@@ -71,8 +107,10 @@ __all__ = [
     'RecetaUploadSerializer',
     'OCRScanRequestSerializer',
     'OCRResultadoEstudioSerializer',
+    'OCRRenglonMapeadoSerializer',
     'OCRSugerenciaContextualSerializer',
     'OCRScanResponseSerializer',
+    'RenglonConfirmadoFeedbackSerializer',
     'RetroalimentacionOCRSerializer',
     'OCRUploadSchema',
 ]

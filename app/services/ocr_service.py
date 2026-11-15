@@ -138,7 +138,8 @@ class OCRIntegrationService:
         cls,
         texto_detectado: str,
         nombre_estudio: str,
-        codigo_practica: str
+        codigo_practica: str,
+        min_score: float = 80.0
     ) -> float:
         """Calcula el grado de coincidencia entre un texto detectado y un estudio clínico."""
         texto_norm = normalizar_texto_clinico(texto_detectado)
@@ -175,15 +176,273 @@ class OCRIntegrationService:
                     if concepto == w_estudio:
                         return 100.0
                     ratio_palabra = fuzz.ratio(concepto, w_estudio)
-                    if ratio_palabra >= 80:
+                    umbral_palabra = 80.0 if min(len(concepto), len(w_estudio)) < 4 else min_score
+                    if ratio_palabra >= umbral_palabra:
                         max_score = max(max_score, ratio_palabra)
 
             if len(concepto.split()) > 1:
                 score_set = fuzz.token_set_ratio(concepto, estudio_norm)
                 if score_set >= 80:
                     max_score = max(max_score, score_set)
+                elif min_score < 80.0:
+                    score_sort = fuzz.token_sort_ratio(concepto, estudio_norm)
+                    if score_sort >= min_score:
+                        max_score = max(max_score, score_sort)
 
         return round(float(max_score), 2)
+
+    @staticmethod
+    def _dividir_subsegmentos(raw_texto: str) -> List[str]:
+        """Divide un renglón compuesto en posibles sub-segmentos individuales."""
+        partes = [
+            p.strip()
+            for p in re.split(r'[,;/+]|\s+-\s+|\s+y\s+', str(raw_texto or ''), flags=re.IGNORECASE)
+            if p and p.strip()
+        ]
+        return [p for p in partes if len(normalizar_texto_clinico(p)) >= 2]
+
+    @staticmethod
+    def _limpiar_imagen_muestra(imagen: Any) -> str:
+        """Valida y sanea la imagen recortada Base64 WebP/JPEG para persistencia liviana."""
+        if not isinstance(imagen, str):
+            return ''
+        img = imagen.strip()
+        if img.startswith('data:image/') and len(img) <= 100_000:
+            return img
+        return ''
+
+    @classmethod
+    def _buscar_mejor_combo_para_texto(
+        cls,
+        texto_norm: str,
+        patrones_activos: List[PerfilEstudioPatron]
+    ) -> Tuple[PerfilEstudioPatron | None, float]:
+        """Busca el perfil/combo de rutina más específico que coincide con texto_norm."""
+        mejor_patron = None
+        mejor_criterio = (-1, -1, -1, -1)
+
+        for patron in patrones_activos:
+            disparadores = [normalizar_texto_clinico(d) for d in (patron.disparadores or [])]
+            disparadores_validos = [d for d in disparadores if len(d) >= 3]
+            if not disparadores_validos:
+                continue
+
+            coincidencias = [
+                disp for disp in disparadores_validos
+                if disp in texto_norm or fuzz.token_set_ratio(disp, texto_norm) >= 82
+            ]
+            if coincidencias:
+                exacto = 1 if any(disp == texto_norm for disp in coincidencias) else 0
+                max_len = max(len(disp) for disp in coincidencias)
+                oficial = 1 if patron.es_oficial else 0
+                criterio = (exacto, max_len, oficial, patron.frecuencia_uso)
+                if criterio > mejor_criterio:
+                    mejor_criterio = criterio
+                    mejor_patron = patron
+
+        return mejor_patron, (100.0 if mejor_patron else 0.0)
+
+    @classmethod
+    def evaluar_renglon_individual(
+        cls,
+        indice: int,
+        raw_texto: str,
+        patrones_activos: List[PerfilEstudioPatron],
+        alias_activos: List[EstudioAliasAprendido],
+        estudios_activos: List[Estudios],
+        textos_descartados_globales: Set[str],
+        pares_descartados: Set[Tuple[str, int]],
+        umbral_similitud: float = 75.0
+    ) -> Dict[str, Any]:
+        """
+        Evalúa un único renglón detectado por OCR contra:
+        1. Filtro de ruido aprendido (renglones descartados por el personal).
+        2. Baterías/Combos (PerfilEstudioPatron).
+        3. Alias aprendidos (EstudioAliasAprendido) con coincidencia exacta y fuzzy ponderada.
+        4. Catálogo maestro (Estudios) + diccionario clínico sobre el renglón y sus sub-segmentos.
+        """
+        texto_norm = normalizar_texto_clinico(raw_texto)
+        if not texto_norm or texto_norm in textos_descartados_globales:
+            return {
+                'indice': indice,
+                'texto_renglon': raw_texto,
+                'texto_normalizado': texto_norm,
+                'es_ruido_aprendido': True,
+                'combo_detectado': None,
+                'imagen_muestra_conocida': '',
+                'recomendados': []
+            }
+
+        estudios_por_id = {e.id: e for e in estudios_activos}
+        candidatos_por_id: Dict[int, Dict[str, Any]] = {}
+        mejor_por_segmento: Dict[str, Tuple[int, float]] = {}
+        combo_detectado = None
+        imagen_muestra_conocida = ''
+
+        def _registrar_candidato(
+            estudio: Estudios,
+            score: float,
+            origen: str,
+            veces_confirmado: int = 0,
+            imagen_muestra: str = '',
+            preseleccionado: bool = False,
+            segmento_key: str = ''
+        ) -> None:
+            actual = candidatos_por_id.get(estudio.id)
+            img_final = imagen_muestra or (actual['imagen_muestra'] if actual else '')
+            veces_final = max(veces_confirmado, actual['veces_confirmado'] if actual else 0)
+            presel_final = preseleccionado or (actual['preseleccionado'] if actual else False)
+
+            if actual is None or score > actual['similitud_score'] or (
+                score == actual['similitud_score'] and origen in ('COMBO_RUTINA', 'MEMORIA_APRENDIDA')
+            ):
+                candidatos_por_id[estudio.id] = {
+                    'id_estudio': estudio.id,
+                    'codigo_practica': estudio.codigo_practica,
+                    'nombre': estudio.nombre,
+                    'tipo_muestra': estudio.tipo_muestra,
+                    'similitud_score': round(float(score), 2),
+                    'texto_detectado_origen': raw_texto,
+                    'origen_deteccion': origen,
+                    'preseleccionado': presel_final,
+                    'veces_confirmado': veces_final,
+                    'imagen_muestra': img_final,
+                }
+            else:
+                actual['imagen_muestra'] = img_final
+                actual['veces_confirmado'] = veces_final
+                actual['preseleccionado'] = presel_final
+
+            if segmento_key:
+                prev_seg = mejor_por_segmento.get(segmento_key)
+                if prev_seg is None or score > prev_seg[1]:
+                    mejor_por_segmento[segmento_key] = (estudio.id, score)
+
+        # Paso 1: Baterías / Combos (PerfilEstudioPatron)
+        patron_combo, _ = cls._buscar_mejor_combo_para_texto(texto_norm, patrones_activos)
+        if patron_combo:
+            combo_detectado = patron_combo.nombre_perfil
+            imagen_muestra_conocida = patron_combo.imagen_muestra or ''
+            for est_id in (patron_combo.estudios_ids or []):
+                est = estudios_por_id.get(est_id)
+                if est and (texto_norm, est.id) not in pares_descartados:
+                    _registrar_candidato(
+                        estudio=est,
+                        score=100.0,
+                        origen='COMBO_RUTINA',
+                        veces_confirmado=patron_combo.frecuencia_uso,
+                        imagen_muestra=patron_combo.imagen_muestra or '',
+                        preseleccionado=True
+                    )
+
+        # Paso 2: Sub-segmentos y Alias Aprendidos (EstudioAliasAprendido)
+        sub_segmentos = cls._dividir_subsegmentos(raw_texto)
+        segmentos_evaluar = [raw_texto]
+        if len(sub_segmentos) > 1:
+            segmentos_evaluar.extend(sub_segmentos)
+
+        segmentos_norm_vistos: Set[str] = set()
+        segmentos_con_norm: List[Tuple[str, str]] = []
+        for seg in segmentos_evaluar:
+            seg_norm = normalizar_texto_clinico(seg)
+            if len(seg_norm) >= 2 and seg_norm not in segmentos_norm_vistos:
+                segmentos_norm_vistos.add(seg_norm)
+                segmentos_con_norm.append((seg, seg_norm))
+
+        for _, seg_norm in segmentos_con_norm:
+            for alias in alias_activos:
+                estudio = alias.estudio
+                if not estudio or not estudio.activo:
+                    continue
+                if (texto_norm, estudio.id) in pares_descartados or (seg_norm, estudio.id) in pares_descartados:
+                    continue
+
+                patron_norm = normalizar_texto_clinico(alias.texto_patron)
+                if not patron_norm:
+                    continue
+
+                score_alias = 0.0
+                if seg_norm == patron_norm or (len(patron_norm) >= 4 and patron_norm in seg_norm):
+                    score_alias = 100.0
+                elif len(seg_norm) >= 3 and len(patron_norm) >= 3:
+                    ratio = max(fuzz.ratio(seg_norm, patron_norm), fuzz.token_set_ratio(seg_norm, patron_norm))
+                    if ratio >= 78:
+                        score_alias = min(100.0, round(ratio + min(12.0, alias.veces_confirmado * 2.5), 2))
+
+                if score_alias > 0.0:
+                    img_alias = alias.imagen_muestra or ''
+                    if img_alias and not imagen_muestra_conocida:
+                        imagen_muestra_conocida = img_alias
+                    _registrar_candidato(
+                        estudio=estudio,
+                        score=score_alias,
+                        origen='MEMORIA_APRENDIDA',
+                        veces_confirmado=alias.veces_confirmado,
+                        imagen_muestra=img_alias,
+                        preseleccionado=(score_alias >= 85.0),
+                        segmento_key=seg_norm if len(sub_segmentos) > 1 and seg_norm != texto_norm else ''
+                    )
+
+        # Paso 3: Catálogo Maestro (Estudios) + Diccionario Nuclear
+        for seg_raw, seg_norm in segmentos_con_norm:
+            for estudio in estudios_activos:
+                if (texto_norm, estudio.id) in pares_descartados or (seg_norm, estudio.id) in pares_descartados:
+                    continue
+
+                score_cat = cls.calcular_similitud_estudio(
+                    texto_detectado=seg_raw,
+                    nombre_estudio=estudio.nombre,
+                    codigo_practica=estudio.codigo_practica,
+                    min_score=55.0
+                )
+                if score_cat >= 55.0:
+                    _registrar_candidato(
+                        estudio=estudio,
+                        score=score_cat,
+                        origen='OCR_DIRECTO',
+                        preseleccionado=False,
+                        segmento_key=seg_norm if len(sub_segmentos) > 1 and seg_norm != texto_norm else ''
+                    )
+
+        # Paso 4: Selección y Ranking de Recomendados del Renglón
+        if len(sub_segmentos) > 1:
+            for seg in sub_segmentos:
+                seg_norm = normalizar_texto_clinico(seg)
+                mejor_seg = mejor_por_segmento.get(seg_norm)
+                if mejor_seg and mejor_seg[1] >= umbral_similitud:
+                    cand_seg = candidatos_por_id.get(mejor_seg[0])
+                    if cand_seg:
+                        cand_seg['preseleccionado'] = True
+
+        candidatos = list(candidatos_por_id.values())
+        candidatos.sort(
+            key=lambda c: (
+                1 if c['preseleccionado'] else 0,
+                c['similitud_score'],
+                c['veces_confirmado'],
+                1 if c['origen_deteccion'] in ('COMBO_RUTINA', 'MEMORIA_APRENDIDA') else 0
+            ),
+            reverse=True
+        )
+
+        umbral_presel = min(float(umbral_similitud), 72.0)
+        if candidatos and not any(c['preseleccionado'] for c in candidatos):
+            if candidatos[0]['similitud_score'] >= umbral_presel:
+                candidatos[0]['preseleccionado'] = True
+
+        preseleccionados = [c for c in candidatos if c['preseleccionado']]
+        alternativos = [c for c in candidatos if not c['preseleccionado'] and c['similitud_score'] >= 55.0][:3]
+        recomendados = preseleccionados + alternativos
+
+        return {
+            'indice': indice,
+            'texto_renglon': raw_texto,
+            'texto_normalizado': texto_norm,
+            'es_ruido_aprendido': False,
+            'combo_detectado': combo_detectado,
+            'imagen_muestra_conocida': imagen_muestra_conocida,
+            'recomendados': recomendados
+        }
 
     @classmethod
     def buscar_combos_rutina(
@@ -282,20 +541,29 @@ class OCRIntegrationService:
     @classmethod
     def aplicar_boosting_contextual(
         cls,
-        sugerencias: List[Dict[str, Any]]
+        sugerencias: List[Dict[str, Any]],
+        renglones: List[Dict[str, Any]] = None
     ) -> None:
         """
         Fase C: Desambiguación Contextual. Si hay estudios con alta certeza (anclas >= 85%),
-        eleva la puntuación de estudios dudosos (60% - 84%) que estadísticamente co-ocurren con ellos.
+        eleva la puntuación de estudios dudosos (55% - 84%) que estadísticamente co-ocurren con ellos.
         """
-        anclas_ids = [s['id_estudio'] for s in sugerencias if s['similitud_score'] >= 85.0]
-        if not anclas_ids:
+        anclas_set: Set[int] = {s['id_estudio'] for s in sugerencias if s['similitud_score'] >= 85.0}
+        if renglones:
+            for renglon in renglones:
+                if renglon.get('es_ruido_aprendido'):
+                    continue
+                for rec in renglon.get('recomendados', []):
+                    if rec.get('similitud_score', 0.0) >= 85.0:
+                        anclas_set.add(rec['id_estudio'])
+
+        if not anclas_set:
             return
 
         try:
             coocurrencias = list(
                 CoocurrenciaEstudio.objects.filter(
-                    estudio_a_id__in=anclas_ids,
+                    estudio_a_id__in=list(anclas_set),
                     indice_afinidad__gte=0.60
                 )
             )
@@ -305,11 +573,32 @@ class OCRIntegrationService:
         ids_con_alta_afinidad = {c.estudio_b_id for c in coocurrencias}
 
         for sug in sugerencias:
-            if 60.0 <= sug['similitud_score'] < 85.0:
-                if sug['id_estudio'] in ids_con_alta_afinidad:
-                    sug['similitud_score'] = 88.0
-                    sug['origen_deteccion'] = 'VALIDADO_POR_CONTEXTO'
-                    sug['texto_detectado_origen'] += ' [Reforzado por co-ocurrencia clínica]'
+            if 55.0 <= sug['similitud_score'] < 85.0 and sug['id_estudio'] in ids_con_alta_afinidad:
+                sug['similitud_score'] = 88.0
+                sug['origen_deteccion'] = 'VALIDADO_POR_CONTEXTO'
+                sug['texto_detectado_origen'] += ' [Reforzado por co-ocurrencia clínica]'
+
+        if renglones:
+            for renglon in renglones:
+                if renglon.get('es_ruido_aprendido'):
+                    continue
+                recs = renglon.get('recomendados', [])
+                tenia_preseleccionado = any(r.get('preseleccionado') for r in recs)
+                for rec in recs:
+                    if 55.0 <= rec.get('similitud_score', 0.0) < 85.0 and rec['id_estudio'] in ids_con_alta_afinidad:
+                        rec['similitud_score'] = 88.0
+                        rec['origen_deteccion'] = 'VALIDADO_POR_CONTEXTO'
+                        if not tenia_preseleccionado:
+                            rec['preseleccionado'] = True
+                            tenia_preseleccionado = True
+                recs.sort(
+                    key=lambda c: (
+                        1 if c.get('preseleccionado') else 0,
+                        c.get('similitud_score', 0.0),
+                        c.get('veces_confirmado', 0)
+                    ),
+                    reverse=True
+                )
 
     @classmethod
     def obtener_sugerencias_contextuales(
@@ -360,18 +649,20 @@ class OCRIntegrationService:
         umbral_similitud: int = None
     ) -> Dict[str, Any]:
         """
-        Orquesta el pipeline completo de mapeo:
-        1. Búsqueda de Baterías de Rutina (Combos por IDs).
-        2. Memoria Adaptativa de abreviaturas.
-        3. Fuzzy matching y abreviaturas nucleares.
-        4. Desambiguación contextual (Boosting).
-        5. Sugerencias complementarias de co-ocurrencia.
+        Orquesta el pipeline completo de mapeo renglón por renglón:
+        1. Filtro de ruido aprendido.
+        2. Baterías de Rutina (Combos por IDs).
+        3. Memoria Adaptativa de abreviaturas (exacta y fuzzy ponderada por frecuencia).
+        4. Fuzzy matching sobre catálogo maestro y sub-segmentos.
+        5. Desambiguación contextual (Boosting).
+        6. Sugerencias complementarias de co-ocurrencia.
         """
         if not textos_detectados:
             return {
                 'sugerencias': [],
                 'total_sugerencias': 0,
                 'combo_detectado': None,
+                'renglones': [],
                 'sugerencias_contextuales': []
             }
 
@@ -379,83 +670,321 @@ class OCRIntegrationService:
             umbral_similitud = getattr(settings, 'OCR_SIMILARITY_THRESHOLD', 75)
 
         textos_limpios = [str(t).strip() for t in textos_detectados if len(str(t).strip()) >= 2]
-        textos_norm = [normalizar_texto_clinico(t) for t in textos_limpios]
+        if not textos_limpios:
+            return {
+                'sugerencias': [],
+                'total_sugerencias': 0,
+                'combo_detectado': None,
+                'renglones': [],
+                'sugerencias_contextuales': []
+            }
 
-        sugerencias: List[Dict[str, Any]] = []
-        ids_agregados: Set[int] = set()
+        try:
+            patrones_activos = list(PerfilEstudioPatron.objects.filter(activo=True))
+        except Exception as e:
+            logger.warning("No se pudo consultar PerfilEstudioPatron: %s", e)
+            patrones_activos = []
 
-        # 1. Fase A: Combos y Baterías de Rutina
-        combos_sug, combos_ids, combo_nombre = cls.buscar_combos_rutina(textos_norm)
-        for s in combos_sug:
-            ids_agregados.add(s['id_estudio'])
-            sugerencias.append(s)
+        textos_descartados_globales: Set[str] = set()
+        pares_descartados: Set[Tuple[str, int]] = set()
+        alias_activos: List[EstudioAliasAprendido] = []
 
-        # 2. Fase B: Memoria Adaptativa de Abreviaturas
-        aprendidos_sug = cls.buscar_alias_aprendidos(textos_norm, ids_agregados)
-        for s in aprendidos_sug:
-            sugerencias.append(s)
-
-        # 3. Fase C: Fuzzy Matching General con Diccionario Nuclear
-        estudios_activos = list(Estudios.objects.filter(activo=True))
-        for raw_texto in textos_limpios:
-            for estudio in estudios_activos:
-                if estudio.id in ids_agregados:
+        try:
+            todos_alias = list(EstudioAliasAprendido.objects.select_related('estudio').all())
+            for alias in todos_alias:
+                patron_norm = normalizar_texto_clinico(alias.texto_patron)
+                if not patron_norm:
                     continue
+                if alias.estado_revision == 'DESCARTADO':
+                    if alias.estudio_id is None:
+                        textos_descartados_globales.add(patron_norm)
+                    else:
+                        pares_descartados.add((patron_norm, alias.estudio_id))
+                elif alias.estado_revision in ('APROBADO_AUTOMATICO', 'REVISADO_JEFA') and alias.estudio and alias.estudio.activo:
+                    alias_activos.append(alias)
+        except Exception as e:
+            logger.warning("No se pudo consultar EstudioAliasAprendido: %s", e)
 
-                mejor_score = cls.calcular_similitud_estudio(
-                    texto_detectado=raw_texto,
-                    nombre_estudio=estudio.nombre,
-                    codigo_practica=estudio.codigo_practica
-                )
+        estudios_activos = list(Estudios.objects.filter(activo=True))
 
-                if mejor_score >= umbral_similitud:
-                    ids_agregados.add(estudio.id)
-                    sugerencias.append({
-                        'id_estudio': estudio.id,
-                        'codigo_practica': estudio.codigo_practica,
-                        'nombre': estudio.nombre,
-                        'tipo_muestra': estudio.tipo_muestra,
-                        'similitud_score': mejor_score,
-                        'texto_detectado_origen': raw_texto,
-                        'origen_deteccion': 'OCR_DIRECTO'
-                    })
+        renglones: List[Dict[str, Any]] = []
+        for idx, raw_texto in enumerate(textos_limpios):
+            renglon_eval = cls.evaluar_renglon_individual(
+                indice=idx,
+                raw_texto=raw_texto,
+                patrones_activos=patrones_activos,
+                alias_activos=alias_activos,
+                estudios_activos=estudios_activos,
+                textos_descartados_globales=textos_descartados_globales,
+                pares_descartados=pares_descartados,
+                umbral_similitud=float(umbral_similitud)
+            )
+            renglones.append(renglon_eval)
 
-        # 4. Fase D: Boosting Contextual
-        cls.aplicar_boosting_contextual(sugerencias)
+        # Boosting contextual sobre los candidatos por renglón
+        cls.aplicar_boosting_contextual([], renglones=renglones)
 
-        # 5. Ordenar por mayor puntaje
-        sugerencias.sort(key=lambda x: x['similitud_score'], reverse=True)
+        # Consolidar lista plana de sugerencias deduplicadas manteniendo retrocompatibilidad
+        sugerencias_por_id: Dict[int, Dict[str, Any]] = {}
+        combo_nombre: str | None = None
 
-        # 6. Fase E: Sugerencias Contextuales Complementarias
+        for renglon in renglones:
+            if renglon.get('es_ruido_aprendido'):
+                continue
+            if not combo_nombre and renglon.get('combo_detectado'):
+                combo_nombre = renglon['combo_detectado']
+            for rec in renglon.get('recomendados', []):
+                if not rec.get('preseleccionado') and rec.get('similitud_score', 0.0) < umbral_similitud:
+                    continue
+                est_id = rec['id_estudio']
+                existente = sugerencias_por_id.get(est_id)
+                if existente is None or rec['similitud_score'] > existente['similitud_score']:
+                    sugerencias_por_id[est_id] = dict(rec)
+
+        sugerencias = sorted(sugerencias_por_id.values(), key=lambda x: x['similitud_score'], reverse=True)
+        ids_agregados = set(sugerencias_por_id.keys())
+
         sugerencias_contextuales = cls.obtener_sugerencias_contextuales(ids_agregados)
 
         return {
             'sugerencias': sugerencias,
             'total_sugerencias': len(sugerencias),
             'combo_detectado': combo_nombre or None,
+            'renglones': renglones,
             'sugerencias_contextuales': sugerencias_contextuales
         }
+
+    @classmethod
+    def _upsert_alias_aprendido(
+        cls,
+        texto_norm: str,
+        estudio: Estudios,
+        imagen_muestra: str = ''
+    ) -> bool:
+        """Crea o refuerza un alias aprendido en EstudioAliasAprendido, guardando el recorte más reciente."""
+        if len(texto_norm) < 2 or texto_norm in STOPWORDS_MEDICAS:
+            return False
+
+        EstudioAliasAprendido.objects.filter(
+            texto_patron=texto_norm,
+            estudio__isnull=True,
+            estado_revision='DESCARTADO'
+        ).delete()
+
+        alias_obj, created = EstudioAliasAprendido.objects.get_or_create(
+            texto_patron=texto_norm,
+            estudio=estudio,
+            defaults={
+                'confianza_score': 100.0,
+                'veces_confirmado': 1,
+                'estado_revision': 'APROBADO_AUTOMATICO',
+                'imagen_muestra': imagen_muestra
+            }
+        )
+        if not created:
+            alias_obj.veces_confirmado += 1
+            alias_obj.confianza_score = 100.0
+            update_fields = ['veces_confirmado', 'confianza_score', 'fecha_ultima_confirmacion']
+            if alias_obj.estado_revision == 'DESCARTADO':
+                alias_obj.estado_revision = 'APROBADO_AUTOMATICO'
+                update_fields.append('estado_revision')
+            if imagen_muestra:
+                alias_obj.imagen_muestra = imagen_muestra
+                update_fields.append('imagen_muestra')
+            alias_obj.save(update_fields=update_fields)
+        return True
+
+    @classmethod
+    def _asociar_subsegmentos_con_estudios(
+        cls,
+        raw_texto: str,
+        estudios_ordenados: List[Estudios],
+        imagen_muestra: str = ''
+    ) -> int:
+        """Si un renglón multi-estudio tiene tantos sub-segmentos como estudios, asocia cada sub-segmento al estudio más afín."""
+        sub_segmentos = cls._dividir_subsegmentos(raw_texto)
+        if len(sub_segmentos) != len(estudios_ordenados) or len(sub_segmentos) < 2:
+            return 0
+
+        pares_puntuados: List[Tuple[float, int, int]] = []
+        for s_idx, seg in enumerate(sub_segmentos):
+            for e_idx, est in enumerate(estudios_ordenados):
+                score = cls.calcular_similitud_estudio(seg, est.nombre, est.codigo_practica, min_score=55.0)
+                bonus_pos = 0.5 if s_idx == e_idx else 0.0
+                pares_puntuados.append((score + bonus_pos, s_idx, e_idx))
+
+        pares_puntuados.sort(key=lambda t: t[0], reverse=True)
+        segs_usados: Set[int] = set()
+        ests_usados: Set[int] = set()
+        total = 0
+
+        for _, s_idx, e_idx in pares_puntuados:
+            if s_idx in segs_usados or e_idx in ests_usados:
+                continue
+            segs_usados.add(s_idx)
+            ests_usados.add(e_idx)
+            seg_norm = normalizar_texto_clinico(sub_segmentos[s_idx])
+            if cls._upsert_alias_aprendido(seg_norm, estudios_ordenados[e_idx], imagen_muestra):
+                total += 1
+
+        return total
 
     @classmethod
     def registrar_retroalimentacion(
         cls,
         lineas_origen: List[str] = None,
         estudios_confirmados_ids: List[int] = None,
-        asociaciones_directas: List[Dict[str, Any]] = None
+        asociaciones_directas: List[Dict[str, Any]] = None,
+        renglones_confirmados: List[Dict[str, Any]] = None,
+        lineas_descartadas: List[str] = None
     ) -> Dict[str, Any]:
         """
         Ingesta asíncrona de aprendizaje activo:
-        1. Registra o incrementa EstudioAliasAprendido para asociaciones individuales.
-        2. Detecta y registra combos de rutina si hubo disparadores genéricos.
-        3. Actualiza la matriz de CoocurrenciaEstudio para los IDs confirmados del ticket.
+        1. Procesa renglones confirmados con su imagen recortada:
+           - 1 estudio -> crea/refuerza EstudioAliasAprendido con imagen_muestra.
+           - >=2 estudios -> crea/refuerza PerfilEstudioPatron con imagen_muestra y sub-segmentos si aplica.
+        2. Marca renglones descartados como ruido ('DESCARTADO') para filtrarlos en futuros escaneos.
+        3. Mantiene compatibilidad con asociaciones_directas y lineas_origen.
+        4. Actualiza la matriz de CoocurrenciaEstudio para todos los IDs confirmados del ticket.
         """
         lineas_origen = lineas_origen or []
-        estudios_confirmados_ids = [int(i) for i in (estudios_confirmados_ids or []) if str(i).isdigit()]
         asociaciones_directas = asociaciones_directas or []
+        renglones_confirmados = renglones_confirmados or []
+        lineas_descartadas = lineas_descartadas or []
+
+        todos_ids_set: Set[int] = {
+            int(i) for i in (estudios_confirmados_ids or []) if str(i).isdigit()
+        }
+        for r in renglones_confirmados:
+            for eid in (r.get('estudios_ids') or []):
+                if str(eid).isdigit():
+                    todos_ids_set.add(int(eid))
+
+        estudios_activos_map = {
+            e.id: e for e in Estudios.objects.filter(id__in=list(todos_ids_set), activo=True)
+        }
+        estudios_confirmados_ids_validos = sorted(estudios_activos_map.keys())
 
         total_alias_actualizados = 0
+        total_baterias_actualizadas = 0
+        total_descartados = 0
 
-        # 1. Guardar asociaciones de alias individuales
+        # 1. Procesar renglones confirmados con aprendizaje dual automático
+        patrones_activos = list(PerfilEstudioPatron.objects.filter(activo=True))
+        for item in renglones_confirmados:
+            raw_t = item.get('texto', '')
+            texto_norm = normalizar_texto_clinico(raw_t)
+            if len(texto_norm) < 2:
+                continue
+
+            est_ids_renglon: List[int] = []
+            vistos_r: Set[int] = set()
+            for eid in (item.get('estudios_ids') or []):
+                if str(eid).isdigit():
+                    eid_int = int(eid)
+                    if eid_int in estudios_activos_map and eid_int not in vistos_r:
+                        vistos_r.add(eid_int)
+                        est_ids_renglon.append(eid_int)
+
+            if not est_ids_renglon:
+                continue
+
+            imagen_str = cls._limpiar_imagen_muestra(item.get('imagen_muestra'))
+
+            if len(est_ids_renglon) == 1:
+                if cls._upsert_alias_aprendido(texto_norm, estudios_activos_map[est_ids_renglon[0]], imagen_str):
+                    total_alias_actualizados += 1
+            else:
+                EstudioAliasAprendido.objects.filter(
+                    texto_patron=texto_norm,
+                    estudio__isnull=True,
+                    estado_revision='DESCARTADO'
+                ).delete()
+
+                patron_existente = None
+                for p in patrones_activos:
+                    disps_norm = [normalizar_texto_clinico(d) for d in (p.disparadores or [])]
+                    if texto_norm in disps_norm or normalizar_texto_clinico(p.nombre_perfil) == texto_norm:
+                        patron_existente = p
+                        break
+
+                if patron_existente:
+                    patron_existente.frecuencia_uso += 1
+                    patron_existente.estudios_ids = sorted(list(set((patron_existente.estudios_ids or []) + est_ids_renglon)))
+                    disps = list(patron_existente.disparadores or [])
+                    if texto_norm not in [normalizar_texto_clinico(d) for d in disps]:
+                        disps.append(texto_norm)
+                        patron_existente.disparadores = disps
+                    update_fields = ['frecuencia_uso', 'estudios_ids', 'disparadores', 'fecha_actualizacion']
+                    if imagen_str:
+                        patron_existente.imagen_muestra = imagen_str
+                        update_fields.append('imagen_muestra')
+                    patron_existente.save(update_fields=update_fields)
+                else:
+                    nombre_combo = f"Batería: {texto_norm[:130].title()}"
+                    patron_nuevo, created = PerfilEstudioPatron.objects.get_or_create(
+                        nombre_perfil=nombre_combo,
+                        defaults={
+                            'disparadores': [texto_norm],
+                            'estudios_ids': sorted(est_ids_renglon),
+                            'frecuencia_uso': 1,
+                            'activo': True,
+                            'imagen_muestra': imagen_str
+                        }
+                    )
+                    if not created:
+                        patron_nuevo.frecuencia_uso += 1
+                        patron_nuevo.estudios_ids = sorted(list(set((patron_nuevo.estudios_ids or []) + est_ids_renglon)))
+                        disps = list(patron_nuevo.disparadores or [])
+                        if texto_norm not in [normalizar_texto_clinico(d) for d in disps]:
+                            disps.append(texto_norm)
+                            patron_nuevo.disparadores = disps
+                        patron_nuevo.activo = True
+                        update_fields = ['frecuencia_uso', 'estudios_ids', 'disparadores', 'activo', 'fecha_actualizacion']
+                        if imagen_str:
+                            patron_nuevo.imagen_muestra = imagen_str
+                            update_fields.append('imagen_muestra')
+                        patron_nuevo.save(update_fields=update_fields)
+                    patrones_activos.append(patron_nuevo)
+
+                total_baterias_actualizadas += 1
+                total_alias_actualizados += cls._asociar_subsegmentos_con_estudios(
+                    raw_texto=raw_t,
+                    estudios_ordenados=[estudios_activos_map[eid] for eid in est_ids_renglon],
+                    imagen_muestra=imagen_str
+                )
+
+        # 2. Registrar líneas descartadas como ruido aprendido
+        for linea_desc in lineas_descartadas:
+            texto_norm = normalizar_texto_clinico(linea_desc)
+            if len(texto_norm) < 2:
+                continue
+
+            EstudioAliasAprendido.objects.filter(
+                texto_patron=texto_norm,
+                estudio__isnull=False
+            ).exclude(estado_revision='REVISADO_JEFA').update(estado_revision='DESCARTADO')
+
+            centinela = EstudioAliasAprendido.objects.filter(
+                texto_patron=texto_norm,
+                estudio__isnull=True
+            ).first()
+            if centinela:
+                if centinela.estado_revision != 'DESCARTADO':
+                    centinela.estado_revision = 'DESCARTADO'
+                    centinela.confianza_score = 0.0
+                    centinela.save(update_fields=['estado_revision', 'confianza_score', 'fecha_ultima_confirmacion'])
+            else:
+                EstudioAliasAprendido.objects.create(
+                    texto_patron=texto_norm,
+                    estudio=None,
+                    estado_revision='DESCARTADO',
+                    confianza_score=0.0,
+                    veces_confirmado=1
+                )
+            total_descartados += 1
+
+        # 3. Compatibilidad con asociaciones_directas heredadas
         for item in asociaciones_directas:
             raw_t = item.get('texto')
             est_id = item.get('estudio_id')
@@ -463,50 +992,39 @@ class OCRIntegrationService:
                 continue
 
             texto_norm = normalizar_texto_clinico(raw_t)
-            if len(texto_norm) < 2 or texto_norm in STOPWORDS_MEDICAS:
-                continue
-
             try:
                 estudio = Estudios.objects.get(id=est_id, activo=True)
-                alias_obj, created = EstudioAliasAprendido.objects.get_or_create(
-                    texto_patron=texto_norm,
-                    estudio=estudio,
-                    defaults={'confianza_score': 100.0, 'veces_confirmado': 1}
-                )
-                if not created:
-                    alias_obj.veces_confirmado += 1
-                    alias_obj.save(update_fields=['veces_confirmado', 'fecha_ultima_confirmacion'])
-                total_alias_actualizados += 1
+                if cls._upsert_alias_aprendido(texto_norm, estudio, ''):
+                    total_alias_actualizados += 1
             except Estudios.DoesNotExist:
                 continue
 
-        # 2. Guardar combos de rutina si alguna línea contenía palabras disparadoras
+        # 4. Compatibilidad con combos disparados desde lineas_origen si no se envió en renglones_confirmados
         palabras_combo = {'rutina', 'chequeo', 'prequirurgico', 'control anual', 'laboratorio general'}
-        if len(estudios_confirmados_ids) >= 3:
+        if not renglones_confirmados and len(estudios_confirmados_ids_validos) >= 3:
             for linea in lineas_origen:
                 linea_norm = normalizar_texto_clinico(linea)
                 if any(p in linea_norm for p in palabras_combo):
                     nombre_combo = f"Rutina Habitual ({linea_norm.title()})"
-                    patron, _ = PerfilEstudioPatron.objects.get_or_create(
+                    patron, created = PerfilEstudioPatron.objects.get_or_create(
                         nombre_perfil=nombre_combo,
                         defaults={
                             'disparadores': [linea_norm],
-                            'estudios_ids': sorted(estudios_confirmados_ids),
+                            'estudios_ids': estudios_confirmados_ids_validos,
                             'frecuencia_uso': 1
                         }
                     )
-                    if not _:
+                    if not created:
                         patron.frecuencia_uso += 1
-                        # Fusionar IDs observados
-                        nuevos_ids = sorted(list(set(patron.estudios_ids + estudios_confirmados_ids)))
-                        patron.estudios_ids = nuevos_ids
+                        patron.estudios_ids = sorted(list(set(patron.estudios_ids + estudios_confirmados_ids_validos)))
                         patron.save(update_fields=['frecuencia_uso', 'estudios_ids', 'fecha_actualizacion'])
+                    total_baterias_actualizadas += 1
                     break
 
-        # 3. Actualizar matriz de Co-ocurrencia estadística
-        if len(estudios_confirmados_ids) >= 2:
-            for a_id in estudios_confirmados_ids:
-                for b_id in estudios_confirmados_ids:
+        # 5. Actualizar matriz de Co-ocurrencia estadística
+        if len(estudios_confirmados_ids_validos) >= 2:
+            for a_id in estudios_confirmados_ids_validos:
+                for b_id in estudios_confirmados_ids_validos:
                     if a_id == b_id:
                         continue
 
@@ -523,7 +1041,9 @@ class OCRIntegrationService:
         return {
             'success': True,
             'mensaje': 'Retroalimentación y memoria adaptativa registradas con éxito.',
-            'alias_procesados': total_alias_actualizados
+            'alias_procesados': total_alias_actualizados,
+            'baterias_procesadas': total_baterias_actualizadas,
+            'descartados_procesados': total_descartados
         }
 
     @classmethod
