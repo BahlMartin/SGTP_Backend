@@ -8,6 +8,7 @@ Incorpora:
 4. Sugerencias contextuales de prácticas frecuentemente asociadas.
 """
 import io
+import json
 import re
 import unicodedata
 import logging
@@ -49,20 +50,36 @@ ALIAS_CLINICOS_MAP: Dict[str, str] = {
 
     # Orina
     'orina comp': 'orina',
+    'orina sp': 'orina',
     'sedimento': 'orina',
     'sedimento urinario': 'orina',
     'ego': 'orina',
     'orina': 'orina',
+    'alb': 'albuminuria',
+    'rac': 'albuminuria',
+    'cociente': 'albuminuria',
 
     # Función renal
     'urea': 'uremia',
     'bun': 'uremia',
     'crea': 'creatinina',
     'creat': 'creatinina',
+    'cuotinina': 'creatinina',
+    'cuotinim': 'creatinina',
+    'crotinina': 'creatinina',
     'clearence': 'creatinina',
+
+    # Glucemia y Diabetes
+    'hba1c': 'hemoglobina glicosilada',
+    'hb a1c': 'hemoglobina glicosilada',
+    'glicosilada': 'hemoglobina glicosilada',
 
     # Perfil hepático
     'hepatograma': 'hepatograma',
+    'hypato': 'hepatograma',
+    'hypatograma': 'hepatograma',
+    'pote ro': 'hepatograma',
+    'potero': 'hepatograma',
     'tgo': 'hepatograma',
     'tgp': 'hepatograma',
     'got': 'hepatograma',
@@ -74,6 +91,9 @@ ALIAS_CLINICOS_MAP: Dict[str, str] = {
     'lipidograma': 'perfil lipidico',
     'colesterol': 'colesterol',
     'colest': 'colesterol',
+    'costerel': 'colesterol',
+    'costemel': 'colesterol',
+    'colestrol': 'colesterol',
     'trigliceridos': 'trigliceridos',
     'tg': 'trigliceridos',
     'hdl': 'colesterol',
@@ -123,12 +143,31 @@ def normalizar_texto_clinico(texto: str) -> str:
     return ' '.join(texto_limpio.lower().split())
 
 
+def _esqueleto_consonantico(palabra: str) -> str:
+    """Extrae el esqueleto consonántico estructural de un vocablo médico preservando la inicial."""
+    p = re.sub(r'[^a-z]', '', str(palabra or '').lower())
+    if not p:
+        return ''
+    p = p.replace('qu', 'c').replace('v', 'b').replace('z', 's').replace('k', 'c')
+    # Colapsar consonantes repetidas contiguas en origen ("tt", "nn", "ll") sin fusionar sílabas distintas
+    colapsado: List[str] = [p[0]]
+    for ch in p[1:]:
+        if ch == colapsado[-1] and ch not in 'aeiouy':
+            continue
+        colapsado.append(ch)
+    out = [colapsado[0]]
+    for ch in colapsado[1:]:
+        if ch not in 'aeiouy':
+            out.append(ch)
+    return ''.join(out)
+
+
 class OCRIntegrationService:
     """
     Gestiona el pipeline inteligente de mapeo de órdenes médicas:
     1. Baterías y perfiles de rutina por IDs directos.
     2. Memoria léxica adaptativa de abreviaturas aprendidas.
-    3. Fuzzy matching y abreviaturas nucleares.
+    3. Fuzzy matching, esqueleto consonántico cursivo y abreviaturas nucleares.
     4. Desambiguación contextual por co-ocurrencia.
     5. Sugerencias de estudios frecuentes complementarios.
     """
@@ -157,6 +196,18 @@ class OCRIntegrationService:
 
         conceptos_busqueda = set()
         conceptos_busqueda.add(texto_norm)
+        if texto_norm in ALIAS_CLINICOS_MAP:
+            conceptos_busqueda.add(ALIAS_CLINICOS_MAP[texto_norm])
+
+        hay_multi_alias = sum(1 for p in palabras_texto if p in ALIAS_CLINICOS_MAP) >= 2
+        if 2 <= len(palabras_texto) <= 3 and not hay_multi_alias:
+            palabras_sin_stop = [p for p in palabras_texto if p not in STOPWORDS_MEDICAS]
+            squeezed = ''.join(palabras_sin_stop)
+            if len(squeezed) >= 6:
+                conceptos_busqueda.add(squeezed)
+                if squeezed in ALIAS_CLINICOS_MAP:
+                    conceptos_busqueda.add(ALIAS_CLINICOS_MAP[squeezed])
+
         for p in palabras_texto:
             conceptos_busqueda.add(p)
             if p in ALIAS_CLINICOS_MAP:
@@ -167,6 +218,9 @@ class OCRIntegrationService:
         for concepto in conceptos_busqueda:
             if concepto in STOPWORDS_MEDICAS:
                 continue
+
+            es_una_palabra = ' ' not in concepto
+            esq_concepto = _esqueleto_consonantico(concepto) if es_una_palabra and len(concepto) >= 5 else ''
 
             for w_estudio in palabras_estudio:
                 if w_estudio in STOPWORDS_MEDICAS:
@@ -179,6 +233,19 @@ class OCRIntegrationService:
                     umbral_palabra = 80.0 if min(len(concepto), len(w_estudio)) < 4 else min_score
                     if ratio_palabra >= umbral_palabra:
                         max_score = max(max_score, ratio_palabra)
+                    elif esq_concepto and len(w_estudio) >= 6:
+                        esq_estudio = _esqueleto_consonantico(w_estudio)
+                        if len(esq_concepto) >= 3 and len(esq_estudio) >= 4:
+                            esq_ratio = fuzz.ratio(esq_concepto, esq_estudio)
+                            partial_ratio = fuzz.partial_ratio(concepto, w_estudio)
+                            if (
+                                esq_ratio >= 82.0
+                                and partial_ratio >= 72.0
+                                and (ratio_palabra >= 58.0 or concepto[0] == w_estudio[0])
+                            ):
+                                score_skel = min(84.0, 0.55 * esq_ratio + 0.45 * max(partial_ratio, ratio_palabra))
+                                if score_skel >= min_score:
+                                    max_score = max(max_score, score_skel)
 
             if len(concepto.split()) > 1:
                 score_set = fuzz.token_set_ratio(concepto, estudio_norm)
@@ -193,13 +260,33 @@ class OCRIntegrationService:
 
     @staticmethod
     def _dividir_subsegmentos(raw_texto: str) -> List[str]:
-        """Divide un renglón compuesto en posibles sub-segmentos individuales."""
-        partes = [
+        """Divide un renglón compuesto en posibles sub-segmentos individuales (incluyendo abreviaturas por espacio)."""
+        partes_base = [
             p.strip()
             for p in re.split(r'[,;/+]|\s+-\s+|\s+y\s+', str(raw_texto or ''), flags=re.IGNORECASE)
             if p and p.strip()
         ]
-        return [p for p in partes if len(normalizar_texto_clinico(p)) >= 2]
+        resultado: List[str] = []
+        for parte in partes_base:
+            parte_norm = normalizar_texto_clinico(parte)
+            if len(parte_norm) < 2:
+                continue
+
+            tokens_utiles = [
+                t for t in parte_norm.split()
+                if len(t) >= 2 and t not in STOPWORDS_MEDICAS
+            ]
+            alias_conocidos = [t for t in tokens_utiles if t in ALIAS_CLINICOS_MAP]
+            if (
+                len(tokens_utiles) >= 2
+                and len(alias_conocidos) >= 2
+                and parte_norm not in ALIAS_CLINICOS_MAP
+            ):
+                resultado.extend(tokens_utiles)
+            else:
+                resultado.append(parte)
+
+        return resultado
 
     @staticmethod
     def _limpiar_imagen_muestra(imagen: Any) -> str:
@@ -213,32 +300,62 @@ class OCRIntegrationService:
 
     @staticmethod
     def _extraer_vhash(imagen_o_firma: Any) -> str:
-        """Extrae la huella visual perceptual (16-20 hex) desde un parámetro `;vhash=...;` o string directo."""
+        """Extrae la huella visual perceptual (16-24 hex) desde un parámetro `;vhash=...;` o string directo."""
         if not isinstance(imagen_o_firma, str):
             return ''
         valor = imagen_o_firma.strip()
         if not valor:
             return ''
-        m = re.search(r'vhash=([0-9a-fA-F]{16,20})', valor)
+        m = re.search(r'vhash=([0-9a-fA-F]{16,24})', valor)
         if m:
             return m.group(1).lower()
         if valor.lower().startswith('vhash '):
             valor = valor[6:].strip()
-        if re.fullmatch(r'[0-9a-fA-F]{16,20}', valor):
+        if re.fullmatch(r'[0-9a-fA-F]{16,24}', valor):
             return valor.lower()
         return ''
 
     @classmethod
     def calcular_similitud_visual(cls, vhash_a: str, vhash_b: str) -> float:
-        """Compara dos huellas visuales dHash + bucket de aspecto retornando similitud entre 0 y 100."""
+        """Compara dos huellas visuales dHash (tolerante a ±1 desplazamiento), aspecto y mapa 4x4."""
         ha = cls._extraer_vhash(vhash_a)
         hb = cls._extraer_vhash(vhash_b)
         if len(ha) < 16 or len(hb) < 16:
             return 0.0
 
-        xor_val = int(ha[:16], 16) ^ int(hb[:16], 16)
-        diff_bits = bin(xor_val).count('1')
-        score = ((64 - diff_bits) / 64.0) * 100.0
+        val_a = int(ha[:16], 16)
+        val_b = int(hb[:16], 16)
+
+        # Evaluar desplazamiento horizontal global (-1, 0, +1 bit por cada fila de 8 bits)
+        best_dhash_score = 0.0
+        for shift in (0, -1, 1):
+            if shift == 0:
+                diff_bits = bin(val_a ^ val_b).count('1')
+                sim = ((64 - diff_bits) / 64.0) * 100.0
+            else:
+                matched_bits = 0
+                for row_idx in range(8):
+                    row_a = (val_a >> (row_idx * 8)) & 0xFF
+                    row_b = (val_b >> (row_idx * 8)) & 0xFF
+                    if shift == 1:
+                        shifted_a = (row_a >> 1) & 0x7F
+                        masked_b = row_b & 0x7F
+                    else:
+                        shifted_a = row_a & 0x7F
+                        masked_b = (row_b >> 1) & 0x7F
+                    diff_r = bin(shifted_a ^ masked_b).count('1')
+                    matched_bits += (7 - diff_r)
+                # Penalización mínima (-2 pts) por desplazamiento para no empatar con alineación exacta
+                sim = (matched_bits / 56.0) * 100.0 - 2.0
+            if sim > best_dhash_score:
+                best_dhash_score = sim
+
+        score = best_dhash_score
+
+        if len(ha) >= 22 and len(hb) >= 22:
+            morph_diff = bin(int(ha[18:22], 16) ^ int(hb[18:22], 16)).count('1')
+            morph_score = ((16 - morph_diff) / 16.0) * 100.0
+            score = 0.80 * best_dhash_score + 0.20 * morph_score
 
         if len(ha) >= 18 and len(hb) >= 18:
             ar_a = max(1, int(ha[16:18], 16))
@@ -738,51 +855,167 @@ class OCRIntegrationService:
 
         return sugerencias_extra
 
+    @staticmethod
+    def _extraer_mime_y_base64(data_url: str) -> Tuple[str, str]:
+        """Limpia parámetros extra (ej. ;vhash=...) de un DataURL y retorna (mime_type, base64_data)."""
+        if not isinstance(data_url, str) or ';base64,' not in data_url:
+            return '', ''
+        limpio = re.sub(r';vhash=[0-9a-fA-F]+', '', data_url.strip())
+        m = re.match(r'^data:(image/[a-zA-Z0-9.+-]+)(?:;[^,]*)?;base64,([A-Za-z0-9+/=\s]+)$', limpio)
+        if not m:
+            return '', ''
+        return m.group(1).lower(), m.group(2).replace('\n', '').replace('\r', '').strip()
+
     @classmethod
-    def mapear_textos_con_estudios(
+    def _transcribir_recortes_con_vision_ia(
         cls,
-        textos_detectados: List[str],
-        umbral_similitud: int = None,
-        firmas_visuales: List[str] = None
-    ) -> Dict[str, Any]:
+        recortes_dudosos: List[Tuple[int, str, str]],
+        estudios_activos: List[Estudios]
+    ) -> Dict[int, str]:
         """
-        Orquesta el pipeline completo de mapeo renglón por renglón:
-        1. Filtro de ruido aprendido.
-        2. Baterías de Rutina (Combos por IDs) por texto y huella visual.
-        3. Memoria Adaptativa de abreviaturas (exacta, fuzzy ponderada y similitud visual de trazo).
-        4. Fuzzy matching sobre catálogo maestro y sub-segmentos.
-        5. Desambiguación contextual (Boosting).
-        6. Sugerencias complementarias de co-ocurrencia.
+        Asistente híbrido gratuito opcional (Gemini Flash / Groq / Ollama) que interpreta recortes
+        manuscritos cursivos cuando la memoria local y PaddleOCR no alcanzan certeza suficiente.
+        Nunca lanza excepciones: ante falta de API key, timeout o error retorna {}.
         """
-        if not textos_detectados:
-            return {
-                'sugerencias': [],
-                'total_sugerencias': 0,
-                'combo_detectado': None,
-                'renglones': [],
-                'sugerencias_contextuales': []
-            }
+        if not recortes_dudosos:
+            return {}
 
-        if umbral_similitud is None:
-            umbral_similitud = getattr(settings, 'OCR_SIMILARITY_THRESHOLD', 75)
+        provider = str(getattr(settings, 'OCR_VISION_PROVIDER', 'gemini') or 'gemini').strip().lower()
+        api_key = str(getattr(settings, 'OCR_VISION_API_KEY', '') or '').strip()
+        model = str(getattr(settings, 'OCR_VISION_MODEL', 'gemini-2.5-flash') or 'gemini-2.5-flash').strip()
+        ollama_url = str(getattr(settings, 'OCR_VISION_OLLAMA_URL', 'http://localhost:11434') or 'http://localhost:11434').strip()
+        timeout = float(getattr(settings, 'OCR_VISION_TIMEOUT_SECONDS', 4.0) or 4.0)
 
-        firmas_lista = list(firmas_visuales) if isinstance(firmas_visuales, list) else []
-        textos_con_firma: List[Tuple[str, str]] = []
-        for i, t in enumerate(textos_detectados):
-            limpio = str(t).strip()
-            if len(limpio) >= 2:
-                firma_i = str(firmas_lista[i]).strip() if i < len(firmas_lista) else ''
-                textos_con_firma.append((limpio, firma_i))
+        if provider in ('gemini', 'groq') and not api_key:
+            return {}
 
-        if not textos_con_firma:
-            return {
-                'sugerencias': [],
-                'total_sugerencias': 0,
-                'combo_detectado': None,
-                'renglones': [],
-                'sugerencias_contextuales': []
-            }
+        bloques_validos: List[Tuple[int, str, str, str]] = []
+        for idx, raw_texto, data_url in recortes_dudosos[:12]:
+            mime_type, b64_data = cls._extraer_mime_y_base64(data_url)
+            if mime_type and b64_data:
+                bloques_validos.append((idx, str(raw_texto or ''), mime_type, b64_data))
 
+        if not bloques_validos:
+            return {}
+
+        catalogo_nombres = [est.nombre for est in estudios_activos[:200] if est and est.nombre]
+        prompt = (
+            "Eres un asistente bioquímico experto en leer órdenes médicas manuscritas en cursiva en español. "
+            "Para cada imagen de recorte numerada por 'indice', transcribe qué estudios de laboratorio solicita "
+            "apoyándote en los nombres del catálogo activo cuando corresponda. "
+            f"Catálogo activo: {', '.join(catalogo_nombres)}. "
+            "Responde ÚNICAMENTE JSON válido con este formato exacto: "
+            '{"resultados": [{"indice": <int>, "texto": "<estudio(s) detectado(s) o vacio si no es estudio>"}]}.'
+        )
+
+        raw_content = ''
+        try:
+            if provider == 'gemini':
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+                parts: List[Dict[str, Any]] = [{'text': prompt}]
+                for idx, raw_t, mime_t, b64 in bloques_validos:
+                    parts.append({'text': f"Bloque indice {idx} (OCR previo: '{raw_t}'):"})
+                    parts.append({'inline_data': {'mime_type': mime_t, 'data': b64}})
+
+                resp = requests.post(
+                    url,
+                    json={
+                        'contents': [{'parts': parts}],
+                        'generationConfig': {
+                            'temperature': 0.1,
+                            'responseMimeType': 'application/json'
+                        }
+                    },
+                    timeout=timeout
+                )
+                resp.raise_for_status()
+                body = resp.json()
+                candidates = body.get('candidates') or []
+                if candidates:
+                    c_parts = (candidates[0].get('content') or {}).get('parts') or []
+                    if c_parts:
+                        raw_content = str(c_parts[0].get('text') or '')
+
+            elif provider == 'groq':
+                user_content: List[Dict[str, Any]] = [{'type': 'text', 'text': prompt}]
+                for idx, raw_t, mime_t, b64 in bloques_validos:
+                    user_content.append({'type': 'text', 'text': f"Bloque indice {idx} (OCR previo: '{raw_t}'):"})
+                    user_content.append({
+                        'type': 'image_url',
+                        'image_url': {'url': f"data:{mime_t};base64,{b64}"}
+                    })
+
+                resp = requests.post(
+                    'https://api.groq.com/openai/v1/chat/completions',
+                    headers={
+                        'Authorization': f"Bearer {api_key}",
+                        'Content-Type': 'application/json'
+                    },
+                    json={
+                        'model': model,
+                        'temperature': 0.1,
+                        'response_format': {'type': 'json_object'},
+                        'messages': [{'role': 'user', 'content': user_content}]
+                    },
+                    timeout=timeout
+                )
+                resp.raise_for_status()
+                body = resp.json()
+                choices = body.get('choices') or []
+                if choices:
+                    raw_content = str((choices[0].get('message') or {}).get('content') or '')
+
+            elif provider == 'ollama':
+                etiquetas = ', '.join([f"imagen {pos + 1} -> indice {b[0]} (OCR '{b[1]}')" for pos, b in enumerate(bloques_validos)])
+                resp = requests.post(
+                    f"{ollama_url.rstrip('/')}/api/generate",
+                    json={
+                        'model': model,
+                        'prompt': f"{prompt} Correspondencia de imágenes: {etiquetas}.",
+                        'images': [b[3] for b in bloques_validos],
+                        'stream': False,
+                        'format': 'json'
+                    },
+                    timeout=timeout
+                )
+                resp.raise_for_status()
+                raw_content = str(resp.json().get('response') or '')
+            else:
+                return {}
+
+            limpio_json = raw_content.strip()
+            if limpio_json.startswith('```'):
+                limpio_json = re.sub(r'^```(?:json)?\s*|\s*```$', '', limpio_json, flags=re.IGNORECASE).strip()
+            if not limpio_json:
+                return {}
+
+            parsed = json.loads(limpio_json)
+            items = parsed.get('resultados', []) if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
+            indices_esperados = {b[0] for b in bloques_validos}
+            salida: Dict[int, str] = {}
+            for entry in items:
+                if not isinstance(entry, dict):
+                    continue
+                idx_val = entry.get('indice')
+                txt_val = str(entry.get('texto') or '').strip()
+                if str(idx_val).isdigit() and int(idx_val) in indices_esperados and len(txt_val) >= 2:
+                    salida[int(idx_val)] = txt_val
+            return salida
+        except Exception as exc:
+            logger.warning("Asistente de Visión IA (%s) no pudo transcribir bloques dudosos: %s", provider, exc)
+            return {}
+
+    @classmethod
+    def _cargar_contexto_mapeo(
+        cls,
+    ) -> Tuple[
+        List[PerfilEstudioPatron],
+        Set[str],
+        Set[Tuple[str, int]],
+        List[EstudioAliasAprendido],
+        List[Estudios]
+    ]:
+        """Carga patrones de baterías, descartes, alias aprendidos y estudios activos desde la BD."""
         try:
             patrones_activos = list(PerfilEstudioPatron.objects.filter(activo=True))
         except Exception as e:
@@ -794,8 +1027,7 @@ class OCRIntegrationService:
         alias_activos: List[EstudioAliasAprendido] = []
 
         try:
-            todos_alias = list(EstudioAliasAprendido.objects.select_related('estudio').all())
-            for alias in todos_alias:
+            for alias in EstudioAliasAprendido.objects.select_related('estudio').all():
                 patron_norm = normalizar_texto_clinico(alias.texto_patron)
                 if not patron_norm:
                     continue
@@ -810,9 +1042,150 @@ class OCRIntegrationService:
             logger.warning("No se pudo consultar EstudioAliasAprendido: %s", e)
 
         estudios_activos = list(Estudios.objects.filter(activo=True))
+        return patrones_activos, textos_descartados_globales, pares_descartados, alias_activos, estudios_activos
+
+    @classmethod
+    def interpretar_recortes_seleccionados(
+        cls,
+        recortes: List[Dict[str, Any]],
+        umbral_similitud: int = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Interpreta bajo demanda de Admisión un lote de recortes manuscritos explícitamente marcados,
+        garantizando que nunca se envíe la receta completa ni renglones con datos filiatorios (PHI).
+        """
+        if not recortes:
+            return []
+
+        if umbral_similitud is None:
+            umbral_similitud = getattr(settings, 'OCR_SIMILARITY_THRESHOLD', 75)
+
+        (
+            patrones_activos,
+            textos_descartados_globales,
+            pares_descartados,
+            alias_activos,
+            estudios_activos,
+        ) = cls._cargar_contexto_mapeo()
+
+        recortes_tuplas: List[Tuple[int, str, str]] = []
+        por_indice: Dict[int, Dict[str, str]] = {}
+        for item in recortes[:12]:
+            if not isinstance(item, dict):
+                continue
+            idx_raw = item.get('indice')
+            img_url = str(item.get('imagen_recorte') or '').strip()
+            txt_ocr = str(item.get('texto_ocr') or '[Manuscrito a revisar]').strip()
+            firma_v = str(item.get('firma_visual') or '').strip()
+            if str(idx_raw).isdigit() and img_url.startswith('data:image/'):
+                idx_int = int(idx_raw)
+                recortes_tuplas.append((idx_int, txt_ocr, img_url))
+                por_indice[idx_int] = {
+                    'texto_ocr': txt_ocr,
+                    'firma_visual': firma_v
+                }
+
+        if not recortes_tuplas:
+            return []
+
+        transcripciones = cls._transcribir_recortes_con_vision_ia(recortes_tuplas, estudios_activos)
+        resultados: List[Dict[str, Any]] = []
+
+        for idx_int, meta in por_indice.items():
+            texto_ia = transcripciones.get(idx_int, '').strip()
+            if not texto_ia:
+                resultados.append({
+                    'indice': idx_int,
+                    'texto_ocr_original': meta['texto_ocr'],
+                    'texto_transcrito_ia': '',
+                    'combo_detectado': None,
+                    'recomendados': []
+                })
+                continue
+
+            renglon_ia = cls.evaluar_renglon_individual(
+                indice=idx_int,
+                raw_texto=texto_ia,
+                patrones_activos=patrones_activos,
+                alias_activos=alias_activos,
+                estudios_activos=estudios_activos,
+                textos_descartados_globales=textos_descartados_globales,
+                pares_descartados=pares_descartados,
+                umbral_similitud=float(umbral_similitud),
+                firma_visual=meta['firma_visual']
+            )
+            for rec in renglon_ia.get('recomendados', []):
+                rec['origen_deteccion'] = 'VISION_IA'
+
+            resultados.append({
+                'indice': idx_int,
+                'texto_ocr_original': meta['texto_ocr'],
+                'texto_transcrito_ia': texto_ia,
+                'combo_detectado': renglon_ia.get('combo_detectado'),
+                'recomendados': renglon_ia.get('recomendados', [])
+            })
+
+        return resultados
+
+    @classmethod
+    def mapear_textos_con_estudios(
+        cls,
+        textos_detectados: List[str],
+        umbral_similitud: int = None,
+        firmas_visuales: List[str] = None,
+        recortes_imagen: List[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Orquesta el pipeline completo de mapeo renglón por renglón:
+        1. Filtro de ruido aprendido.
+        2. Baterías de Rutina (Combos por IDs) por texto y huella visual.
+        3. Memoria Adaptativa de abreviaturas (exacta, fuzzy ponderada y similitud visual de trazo).
+        4. Fuzzy matching sobre catálogo maestro y sub-segmentos.
+        5. Asistente híbrido gratuito de Visión IA sobre bloques cursivos dudosos (si está configurado).
+        6. Desambiguación contextual (Boosting) y sugerencias de co-ocurrencia.
+        """
+        if not textos_detectados:
+            return {
+                'sugerencias': [],
+                'total_sugerencias': 0,
+                'combo_detectado': None,
+                'renglones': [],
+                'sugerencias_contextuales': []
+            }
+
+        if umbral_similitud is None:
+            umbral_similitud = getattr(settings, 'OCR_SIMILARITY_THRESHOLD', 75)
+
+        firmas_lista = list(firmas_visuales) if isinstance(firmas_visuales, list) else []
+        recortes_lista = list(recortes_imagen) if isinstance(recortes_imagen, list) else []
+        textos_con_firma: List[Tuple[str, str, str]] = []
+        for i, t in enumerate(textos_detectados):
+            limpio = str(t).strip()
+            if len(limpio) >= 2:
+                firma_i = str(firmas_lista[i]).strip() if i < len(firmas_lista) else ''
+                recorte_i = str(recortes_lista[i]).strip() if i < len(recortes_lista) else ''
+                textos_con_firma.append((limpio, firma_i, recorte_i))
+
+        if not textos_con_firma:
+            return {
+                'sugerencias': [],
+                'total_sugerencias': 0,
+                'combo_detectado': None,
+                'renglones': [],
+                'sugerencias_contextuales': []
+            }
+
+        (
+            patrones_activos,
+            textos_descartados_globales,
+            pares_descartados,
+            alias_activos,
+            estudios_activos,
+        ) = cls._cargar_contexto_mapeo()
 
         renglones: List[Dict[str, Any]] = []
-        for idx, (raw_texto, firma_visual) in enumerate(textos_con_firma):
+        recortes_dudosos: List[Tuple[int, str, str]] = []
+        for idx, (raw_texto, firma_visual, recorte_url) in enumerate(textos_con_firma):
             renglon_eval = cls.evaluar_renglon_individual(
                 indice=idx,
                 raw_texto=raw_texto,
@@ -825,6 +1198,38 @@ class OCRIntegrationService:
                 firma_visual=firma_visual
             )
             renglones.append(renglon_eval)
+
+            es_dudoso = not renglon_eval.get('es_ruido_aprendido') and (
+                raw_texto.strip().lower() == '[manuscrito a revisar]'
+                or not any(
+                    r.get('preseleccionado') and r.get('similitud_score', 0.0) >= 78.0
+                    for r in renglon_eval.get('recomendados', [])
+                )
+            )
+            if es_dudoso and recorte_url and recorte_url.startswith('data:image/'):
+                recortes_dudosos.append((idx, raw_texto, recorte_url))
+
+        # Paso 5: Asistente híbrido gratuito de Visión IA solo para bloques dudosos con recorte
+        if recortes_dudosos:
+            transcripciones_ia = cls._transcribir_recortes_con_vision_ia(recortes_dudosos, estudios_activos)
+            for idx_ia, texto_ia in transcripciones_ia.items():
+                _, firma_visual, _ = textos_con_firma[idx_ia]
+                renglon_ia = cls.evaluar_renglon_individual(
+                    indice=idx_ia,
+                    raw_texto=texto_ia,
+                    patrones_activos=patrones_activos,
+                    alias_activos=alias_activos,
+                    estudios_activos=estudios_activos,
+                    textos_descartados_globales=textos_descartados_globales,
+                    pares_descartados=pares_descartados,
+                    umbral_similitud=float(umbral_similitud),
+                    firma_visual=firma_visual
+                )
+                for rec in renglon_ia.get('recomendados', []):
+                    if rec.get('origen_deteccion') == 'OCR_DIRECTO':
+                        rec['origen_deteccion'] = 'VISION_IA'
+                if renglon_ia.get('recomendados'):
+                    renglones[idx_ia] = renglon_ia
 
         # Boosting contextual sobre los candidatos por renglón
         cls.aplicar_boosting_contextual([], renglones=renglones)

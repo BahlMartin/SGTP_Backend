@@ -60,10 +60,15 @@ JWE_PAYLOAD_ENCRYPTION_ENABLED = env.bool('JWE_PAYLOAD_ENCRYPTION_ENABLED', defa
 # Autodesbloqueo de emergencia con token criptográfico
 EMERGENCY_UNLOCK_SECRET_TOKEN = env('EMERGENCY_UNLOCK_SECRET_TOKEN')
 
-# Integración OCR On-Premise LAN
+# Integración OCR On-Premise LAN y Asistente Opcional de Visión IA Gratuito (Gemini / Groq / Ollama)
 OCR_SERVICE_URL = env('OCR_SERVICE_URL')
 OCR_SERVICE_TIMEOUT_SECONDS = env.int('OCR_SERVICE_TIMEOUT_SECONDS', default=15)
 OCR_SIMILARITY_THRESHOLD = env.int('OCR_SIMILARITY_THRESHOLD', default=80)
+OCR_VISION_API_KEY = env('OCR_VISION_API_KEY', default=env('GEMINI_API_KEY', default=''))
+OCR_VISION_PROVIDER = env('OCR_VISION_PROVIDER', default='gemini')
+OCR_VISION_MODEL = env('OCR_VISION_MODEL', default='gemini-2.5-flash')
+OCR_VISION_OLLAMA_URL = env('OCR_VISION_OLLAMA_URL', default='http://localhost:11434')
+OCR_VISION_TIMEOUT_SECONDS = env.float('OCR_VISION_TIMEOUT_SECONDS', default=4.0)
 
 CORS_ALLOW_HEADERS = list(default_headers) + [
     'authorization',

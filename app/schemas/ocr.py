@@ -21,6 +21,12 @@ class RecetaUploadSerializer(serializers.Serializer):
         default=list,
         help_text="Huellas visuales perceptuales opcionales paralelas a cada renglón."
     )
+    recortes_imagen = serializers.ListField(
+        child=serializers.CharField(allow_blank=True),
+        required=False,
+        default=list,
+        help_text="Recortes visuales DataURL opcionales paralelos a cada renglón para lectura cursiva asistida."
+    )
 
 
 class OCRScanRequestSerializer(RecetaUploadSerializer):
@@ -106,6 +112,21 @@ class RetroalimentacionOCRSerializer(serializers.Serializer):
     )
 
 
+class RecorteConsultaIASerializer(serializers.Serializer):
+    indice = serializers.IntegerField(min_value=0)
+    texto_ocr = serializers.CharField(required=False, allow_blank=True, default='')
+    firma_visual = serializers.CharField(required=False, allow_blank=True, default='')
+    imagen_recorte = serializers.CharField(allow_blank=False)
+
+
+class InterpretarRecortesRequestSerializer(serializers.Serializer):
+    recortes = RecorteConsultaIASerializer(
+        many=True,
+        allow_empty=False,
+        help_text="Recortes aislados marcados explícitamente por Admisión para interpretar con Visión IA."
+    )
+
+
 # Alias
 OCRUploadSchema = RecetaUploadSerializer
 
@@ -118,5 +139,7 @@ __all__ = [
     'OCRScanResponseSerializer',
     'RenglonConfirmadoFeedbackSerializer',
     'RetroalimentacionOCRSerializer',
+    'RecorteConsultaIASerializer',
+    'InterpretarRecortesRequestSerializer',
     'OCRUploadSchema',
 ]

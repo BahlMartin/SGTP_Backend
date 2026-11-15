@@ -13,7 +13,8 @@ from drf_spectacular.utils import extend_schema
 from app.schemas.ocr import (
     RecetaUploadSerializer,
     OCRScanResponseSerializer,
-    RetroalimentacionOCRSerializer
+    RetroalimentacionOCRSerializer,
+    InterpretarRecortesRequestSerializer
 )
 from app.services.ocr_service import OCRIntegrationService
 from app.models.studies import PerfilEstudioPatron, Estudios
@@ -41,6 +42,7 @@ class EscanearRecetaOCRView(APIView):
         # 1. Modo Frontend OCR: Recepción de array de textos ya digitalizados
         textos = request.data.get('textos')
         firmas_visuales = request.data.get('firmas_visuales')
+        recortes_imagen = request.data.get('recortes_imagen')
         if textos is not None:
             if not isinstance(textos, list):
                 return Response(
@@ -50,7 +52,8 @@ class EscanearRecetaOCRView(APIView):
 
             resultado = OCRIntegrationService.mapear_textos_con_estudios(
                 textos,
-                firmas_visuales=firmas_visuales if isinstance(firmas_visuales, list) else None
+                firmas_visuales=firmas_visuales if isinstance(firmas_visuales, list) else None,
+                recortes_imagen=recortes_imagen if isinstance(recortes_imagen, list) else None
             )
             combo = resultado.get('combo_detectado')
             msg_combo = f" [Batería detectada: {combo}]" if combo else ""
@@ -172,6 +175,49 @@ class RetroalimentarOCRView(APIView):
         return Response(resultado, status=status.HTTP_200_OK)
 
 
+class InterpretarRecortesIAView(APIView):
+    """
+    Endpoint bajo demanda de Admisión para interpretar únicamente los recortes manuscritos
+    marcados explícitamente en pantalla (sin enviar jamás la receta completa ni PHI).
+    """
+    parser_classes = [JSONParser]
+    permission_classes = [IsAuthenticated, IsAdmisionOrJefa]
+    serializer_class = InterpretarRecortesRequestSerializer
+
+    @extend_schema(request=InterpretarRecortesRequestSerializer)
+    def post(self, request: Request) -> Response:
+        serializer = self.serializer_class(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {"error": "DATOS_INVALIDOS", "detail": serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        recortes = serializer.validated_data['recortes']
+        resultados = OCRIntegrationService.interpretar_recortes_seleccionados(recortes)
+
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.RECETA_ESCANEADA,
+            usuario=request.user,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion='Consulta IA bajo demanda sobre recortes seleccionados',
+            metadata={
+                'recortes_enviados': len(recortes),
+                'recortes_resueltos': sum(1 for r in resultados if r.get('recomendados')),
+                'modo': 'recortes_bajo_demanda_ia'
+            },
+            request=request
+        )
+
+        return Response(
+            {
+                "resultados": resultados,
+                "total_procesados": len(resultados)
+            },
+            status=status.HTTP_200_OK
+        )
+
+
 class PatronesPerfilesView(APIView):
     """
     Lista los perfiles y combos de rutina aprendidos o configurados formalmente por supervisión.
@@ -201,12 +247,14 @@ app_name = 'ocr_endpoints'
 
 urlpatterns = [
     path('escanear-receta/', EscanearRecetaOCRView.as_view(), name='escanear-receta'),
+    path('interpretar-recortes/', InterpretarRecortesIAView.as_view(), name='ocr-interpretar-recortes'),
     path('retroalimentar/', RetroalimentarOCRView.as_view(), name='ocr-retroalimentar'),
     path('patrones/', PatronesPerfilesView.as_view(), name='ocr-patrones'),
 ]
 
 __all__ = [
     'EscanearRecetaOCRView',
+    'InterpretarRecortesIAView',
     'RetroalimentarOCRView',
     'PatronesPerfilesView',
     'urlpatterns',

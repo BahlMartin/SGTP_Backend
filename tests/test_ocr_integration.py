@@ -2,8 +2,9 @@
 Tests de Integración OCR, Memoria Adaptativa, Combos por IDs y Coocurrencia.
 """
 import io
+import json
 from unittest.mock import patch, MagicMock
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 from rest_framework import status
 
@@ -338,3 +339,283 @@ class OCRIntegrationTestCase(TestCase):
             r['id_estudio'] == self.estudio_hemo.id and r['origen_deteccion'] == 'MEMORIA_APRENDIDA'
             for r in renglon['recomendados']
         ))
+
+    def test_fragmentos_cursivos_esqueleto_y_siglas_multiples(self):
+        """Valida matching de fragmentos cursivos ('costerel', 'cuotinim', 'pote ro') y siglas en un bloque ('HDL LDL tg')."""
+        est_col = Estudios.objects.create(
+            codigo_practica='COL-01',
+            nombre='Colesterol Total',
+            tipo_muestra=TipoMuestra.SANGRE,
+            activo=True
+        )
+        est_creat = Estudios.objects.create(
+            codigo_practica='CREA-01',
+            nombre='Creatinina Serica',
+            tipo_muestra=TipoMuestra.SANGRE,
+            activo=True
+        )
+        est_hep = Estudios.objects.create(
+            codigo_practica='HEP-01',
+            nombre='Hepatograma Completo',
+            tipo_muestra=TipoMuestra.SANGRE,
+            activo=True
+        )
+        est_tg = Estudios.objects.create(
+            codigo_practica='TG-01',
+            nombre='Trigliceridos',
+            tipo_muestra=TipoMuestra.SANGRE,
+            activo=True
+        )
+
+        mapeo = OCRIntegrationService.mapear_textos_con_estudios([
+            'costerel',
+            'cuotinim',
+            'pote ro',
+            'HDL LDL tg',
+        ])
+        renglones = mapeo['renglones']
+        self.assertEqual(len(renglones), 4)
+
+        self.assertTrue(any(r['id_estudio'] == est_col.id for r in renglones[0]['recomendados']))
+        self.assertTrue(any(r['id_estudio'] == est_creat.id for r in renglones[1]['recomendados']))
+        self.assertTrue(any(r['id_estudio'] == est_hep.id for r in renglones[2]['recomendados']))
+        ids_siglas = {r['id_estudio'] for r in renglones[3]['recomendados'] if r['preseleccionado']}
+        self.assertIn(est_col.id, ids_siglas)
+        self.assertIn(est_tg.id, ids_siglas)
+
+    @override_settings(OCR_VISION_API_KEY='test-gemini-free-key', OCR_VISION_PROVIDER='gemini', OCR_VISION_MODEL='gemini-2.5-flash')
+    @patch('requests.post')
+    def test_asistente_vision_ia_resuelve_bloque_cursivo_dudoso(self, mock_post):
+        """Valida que el conector opcional Gemini resuelva bloques dudosos con recorte sin romper el flujo local."""
+        est_hep = Estudios.objects.create(
+            codigo_practica='HEP-02',
+            nombre='Hepatograma',
+            tipo_muestra=TipoMuestra.SANGRE,
+            activo=True
+        )
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            'candidates': [{
+                'content': {
+                    'parts': [{
+                        'text': json.dumps({
+                            'resultados': [
+                                {'indice': 1, 'texto': 'Hepatograma'}
+                            ]
+                        })
+                    }]
+                }
+            }]
+        }
+        mock_post.return_value = mock_resp
+
+        crop_webp = "data:image/webp;vhash=1234567890abcdef18;base64,UklGRh4AAABXRUJQVlA4TBEAAAAvAAAAAAfQ//73v/+BiOh/AAA="
+        mapeo = OCRIntegrationService.mapear_textos_con_estudios(
+            textos_detectados=['Hemograma', '[Manuscrito a revisar]'],
+            firmas_visuales=['', '1234567890abcdef18'],
+            recortes_imagen=[crop_webp, crop_webp]
+        )
+
+        # Solo debió consultar por el bloque dudoso índice 1 (Hemograma ya tenía match 100%)
+        mock_post.assert_called_once()
+        called_url = mock_post.call_args[0][0]
+        self.assertIn('generativelanguage.googleapis.com', called_url)
+        self.assertIn('gemini-2.5-flash', called_url)
+
+        renglon_ai = mapeo['renglones'][1]
+        self.assertEqual(renglon_ai['texto_renglon'], 'Hepatograma')
+        self.assertTrue(any(
+            r['id_estudio'] == est_hep.id and r['origen_deteccion'] == 'VISION_IA' and r['preseleccionado']
+            for r in renglon_ai['recomendados']
+        ))
+
+    def test_cursiva_esqueleto_consonantico_subsegmentos_y_vhash_22(self):
+        """Valida esqueleto consonántico cursivo, unión de palabras partidas, split 'HDL LDL tg' y vhash 22-hex."""
+        est_colesterol = Estudios.objects.create(
+            codigo_practica='COL-01',
+            nombre='Colesterol Total',
+            tipo_muestra=TipoMuestra.SANGRE,
+            activo=True
+        )
+        est_trigliceridos = Estudios.objects.create(
+            codigo_practica='TG-01',
+            nombre='Triglicéridos',
+            tipo_muestra=TipoMuestra.SANGRE,
+            activo=True
+        )
+        est_hepato = Estudios.objects.create(
+            codigo_practica='HEP-01',
+            nombre='Hepatograma',
+            tipo_muestra=TipoMuestra.SANGRE,
+            activo=True
+        )
+        est_creatinina = Estudios.objects.create(
+            codigo_practica='CRE-01',
+            nombre='Creatinina Sérica',
+            tipo_muestra=TipoMuestra.SANGRE,
+            activo=True
+        )
+
+        # 1. Alias cursivos + unión de palabras partidas + esqueleto consonántico sin falso positivo
+        self.assertEqual(
+            OCRIntegrationService.calcular_similitud_estudio('costerel', est_colesterol.nombre, est_colesterol.codigo_practica),
+            100.0
+        )
+        self.assertEqual(
+            OCRIntegrationService.calcular_similitud_estudio('Hepato grama', est_hepato.nombre, est_hepato.codigo_practica),
+            100.0
+        )
+        self.assertEqual(
+            OCRIntegrationService.calcular_similitud_estudio('cuotinim', est_creatinina.nombre, est_creatinina.codigo_practica),
+            100.0
+        )
+        # Deformación cursiva inédita (no en diccionario) resuelta por esqueleto consonántico
+        score_skel_col = OCRIntegrationService.calcular_similitud_estudio(
+            'clsterol', est_colesterol.nombre, est_colesterol.codigo_practica, min_score=75.0
+        )
+        self.assertGreaterEqual(score_skel_col, 75.0)
+        score_skel_cre = OCRIntegrationService.calcular_similitud_estudio(
+            'crtinina', est_creatinina.nombre, est_creatinina.codigo_practica, min_score=75.0
+        )
+        self.assertGreaterEqual(score_skel_cre, 75.0)
+
+        # 2. Separación de múltiples siglas en el mismo renglón ("HDL LDL tg")
+        subsegs = OCRIntegrationService._dividir_subsegmentos('HDL LDL tg')
+        self.assertEqual(subsegs, ['hdl', 'ldl', 'tg'])
+
+        mapeo = OCRIntegrationService.mapear_textos_con_estudios(['HDL LDL tg', 'Hepato grama', 'cuotinim'])
+        presel_r0 = {r['id_estudio'] for r in mapeo['renglones'][0]['recomendados'] if r['preseleccionado']}
+        self.assertIn(est_colesterol.id, presel_r0)
+        self.assertIn(est_trigliceridos.id, presel_r0)
+
+        presel_r1 = {r['id_estudio'] for r in mapeo['renglones'][1]['recomendados'] if r['preseleccionado']}
+        self.assertIn(est_hepato.id, presel_r1)
+
+        presel_r2 = {r['id_estudio'] for r in mapeo['renglones'][2]['recomendados'] if r['preseleccionado']}
+        self.assertIn(est_creatinina.id, presel_r2)
+
+        # 3. Huella visual 22 hex (dHash 16 + aspect 2 + morfología 4x4 4) con tolerancia a desplazamiento ±1 bit
+        # Cada fila 0x54 (01010100) desplazada 1 bit a la derecha es 0x2a (00101010)
+        vhash_base = '545454545454545428f3c1'
+        vhash_shift = '2a2a2a2a2a2a2a2a28f3c1'
+        vhash_distinto = 'ff00ff00ff00ff00900000'
+        sim_shift = OCRIntegrationService.calcular_similitud_visual(vhash_base, vhash_shift)
+        sim_distinto = OCRIntegrationService.calcular_similitud_visual(vhash_base, vhash_distinto)
+        self.assertGreaterEqual(sim_shift, 95.0)
+        self.assertLess(sim_distinto, 60.0)
+
+    @override_settings(OCR_VISION_API_KEY='test-gemini-free-key', OCR_VISION_PROVIDER='gemini', OCR_VISION_MODEL='gemini-2.5-flash')
+    @patch('requests.post')
+    def test_endpoint_interpretar_recortes_bajo_demanda_y_memorizacion_posterior(self, mock_post):
+        """Valida consulta grupal explícita /app/ocr/interpretar-recortes/ y memorización local al confirmar."""
+        est_iono = Estudios.objects.create(
+            codigo_practica='IONO-01',
+            nombre='Ionograma Sérico',
+            tipo_muestra=TipoMuestra.SANGRE,
+            activo=True
+        )
+        est_prot = Estudios.objects.create(
+            codigo_practica='PROT-01',
+            nombre='Proteinograma Electroforético',
+            tipo_muestra=TipoMuestra.SANGRE,
+            activo=True
+        )
+        user = Personal.objects.create_user(
+            email='admision_ocr@hospital.local',
+            password='Password123!',
+            nombre='Carlos',
+            apellidos='Ruiz',
+            dni=33445566,
+            rol=RolPersonal.ADMISION
+        )
+        client = APIClient()
+        client.force_authenticate(user=user)
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            'candidates': [{
+                'content': {
+                    'parts': [{
+                        'text': json.dumps({
+                            'resultados': [
+                                {'indice': 1, 'texto': 'Ionograma Sérico'},
+                                {'indice': 3, 'texto': 'Proteinograma Electroforético'}
+                            ]
+                        })
+                    }]
+                }
+            }]
+        }
+        mock_post.return_value = mock_resp
+
+        vhash_1 = '112233445566778820a5a5'
+        vhash_3 = '887766554433221124f0f0'
+        crop_1 = f"data:image/webp;vhash={vhash_1};base64,UklGRh4AAABXRUJQVlA4TBEAAAAvAAAAAAfQ//73v/+BiOh/AAA="
+        crop_3 = f"data:image/webp;vhash={vhash_3};base64,UklGRh4AAABXRUJQVlA4TBEAAAAvAAAAAAfQ//73v/+BiOh/AAA="
+
+        resp = client.post(
+            '/app/ocr/interpretar-recortes/',
+            {
+                'recortes': [
+                    {
+                        'indice': 1,
+                        'texto_ocr': 'iogr x',
+                        'firma_visual': vhash_1,
+                        'imagen_recorte': crop_1
+                    },
+                    {
+                        'indice': 3,
+                        'texto_ocr': '[Manuscrito a revisar]',
+                        'firma_visual': vhash_3,
+                        'imagen_recorte': crop_3
+                    }
+                ]
+            },
+            format='json'
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        mock_post.assert_called_once()
+
+        data = resp.json()
+        self.assertEqual(data['total_procesados'], 2)
+        por_idx = {r['indice']: r for r in data['resultados']}
+
+        self.assertTrue(any(
+            rec['id_estudio'] == est_iono.id and rec['origen_deteccion'] == 'VISION_IA' and rec['preseleccionado']
+            for rec in por_idx[1]['recomendados']
+        ))
+        self.assertTrue(any(
+            rec['id_estudio'] == est_prot.id and rec['origen_deteccion'] == 'VISION_IA' and rec['preseleccionado']
+            for rec in por_idx[3]['recomendados']
+        ))
+
+        # Simular confirmación en Admisión enviando textoOriginalOcr + vhash para memorización local
+        fb_resp = OCRIntegrationService.registrar_retroalimentacion(
+            renglones_confirmados=[
+                {'texto': 'iogr x', 'estudios_ids': [est_iono.id], 'imagen_muestra': crop_1},
+                {'texto': '[Manuscrito a revisar]', 'estudios_ids': [est_prot.id], 'imagen_muestra': crop_3},
+            ]
+        )
+        self.assertTrue(fb_resp['success'])
+        self.assertEqual(fb_resp['alias_procesados'], 2)
+
+        # Resetear el mock y verificar que el siguiente escaneo SIN recortes_imagen lo resuelva 100% local sin llamar a Gemini
+        mock_post.reset_mock()
+        mapeo_local = OCRIntegrationService.mapear_textos_con_estudios(
+            textos_detectados=['iogr x', '[Manuscrito a revisar]'],
+            firmas_visuales=[vhash_1, vhash_3]
+        )
+        mock_post.assert_not_called()
+
+        self.assertTrue(any(
+            r['id_estudio'] == est_iono.id and r['origen_deteccion'] == 'MEMORIA_APRENDIDA' and r['preseleccionado']
+            for r in mapeo_local['renglones'][0]['recomendados']
+        ))
+        self.assertTrue(any(
+            r['id_estudio'] == est_prot.id and r['origen_deteccion'] == 'MEMORIA_APRENDIDA' and r['preseleccionado']
+            for r in mapeo_local['renglones'][1]['recomendados']
+        ))
+
+
