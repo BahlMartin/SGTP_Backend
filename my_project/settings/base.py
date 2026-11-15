@@ -66,9 +66,9 @@ OCR_SERVICE_TIMEOUT_SECONDS = env.int('OCR_SERVICE_TIMEOUT_SECONDS', default=15)
 OCR_SIMILARITY_THRESHOLD = env.int('OCR_SIMILARITY_THRESHOLD', default=80)
 OCR_VISION_API_KEY = env('OCR_VISION_API_KEY', default=env('GEMINI_API_KEY', default=''))
 OCR_VISION_PROVIDER = env('OCR_VISION_PROVIDER', default='gemini')
-OCR_VISION_MODEL = env('OCR_VISION_MODEL', default='gemini-2.5-flash')
+OCR_VISION_MODEL = env('OCR_VISION_MODEL', default='gemini-3.5-flash')
 OCR_VISION_OLLAMA_URL = env('OCR_VISION_OLLAMA_URL', default='http://localhost:11434')
-OCR_VISION_TIMEOUT_SECONDS = env.float('OCR_VISION_TIMEOUT_SECONDS', default=4.0)
+OCR_VISION_TIMEOUT_SECONDS = env.float('OCR_VISION_TIMEOUT_SECONDS', default=20.0)
 
 CORS_ALLOW_HEADERS = list(default_headers) + [
     'authorization',
