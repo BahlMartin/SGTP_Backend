@@ -155,7 +155,8 @@ class RetroalimentarOCRView(APIView):
             estudios_confirmados_ids=data.get('estudios_confirmados_ids', []),
             asociaciones_directas=data.get('asociaciones_directas', []),
             renglones_confirmados=data.get('renglones_confirmados', []),
-            lineas_descartadas=data.get('lineas_descartadas', [])
+            lineas_descartadas=data.get('lineas_descartadas', []),
+            recortes_descartados=data.get('recortes_descartados', [])
         )
 
         AuditService.registrar_evento(

@@ -246,6 +246,11 @@ class RecorteImagenEstudio(models.Model):
     imagen_muestra = models.TextField(
         verbose_name="Recorte de Imagen del Renglón (Base64 WebP)"
     )
+    es_descarte = models.BooleanField(
+        default=False,
+        db_index=True,
+        verbose_name="Marcado como Ruido / No Estudio"
+    )
     fecha_registro = models.DateTimeField(auto_now_add=True, db_index=True)
 
     class Meta:

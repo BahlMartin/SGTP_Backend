@@ -110,6 +110,12 @@ class RetroalimentacionOCRSerializer(serializers.Serializer):
         default=list,
         help_text="Renglones marcados por el personal como ruido / no estudio"
     )
+    recortes_descartados = serializers.ListField(
+        child=serializers.DictField(),
+        required=False,
+        default=list,
+        help_text="Lista opcional de { texto, imagen_muestra } descartados como ruido visual"
+    )
 
 
 class RecorteConsultaIASerializer(serializers.Serializer):

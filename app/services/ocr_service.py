@@ -302,24 +302,24 @@ class OCRIntegrationService:
 
     @staticmethod
     def _extraer_vhash(imagen_o_firma: Any) -> str:
-        """Extrae la huella visual perceptual (16-24 hex) desde un parámetro `;vhash=...;` o string directo."""
+        """Extrae la huella visual perceptual (16-32 hex) desde un parámetro `;vhash=...;` o string directo."""
         if not isinstance(imagen_o_firma, str):
             return ''
         valor = imagen_o_firma.strip()
         if not valor:
             return ''
-        m = re.search(r'vhash=([0-9a-fA-F]{16,24})', valor)
+        m = re.search(r'vhash=([0-9a-fA-F]{16,32})', valor)
         if m:
             return m.group(1).lower()
         if valor.lower().startswith('vhash '):
             valor = valor[6:].strip()
-        if re.fullmatch(r'[0-9a-fA-F]{16,24}', valor):
+        if re.fullmatch(r'[0-9a-fA-F]{16,32}', valor):
             return valor.lower()
         return ''
 
     @classmethod
     def calcular_similitud_visual(cls, vhash_a: str, vhash_b: str) -> float:
-        """Compara dos huellas visuales dHash (tolerante a ±1 desplazamiento), aspecto y mapa 4x4."""
+        """Compara dos huellas visuales dHash (±1 desplazamiento), aspecto, mapa 4x4 y envolvente vertical."""
         ha = cls._extraer_vhash(vhash_a)
         hb = cls._extraer_vhash(vhash_b)
         if len(ha) < 16 or len(hb) < 16:
@@ -354,7 +354,13 @@ class OCRIntegrationService:
 
         score = best_dhash_score
 
-        if len(ha) >= 22 and len(hb) >= 22:
+        if len(ha) >= 26 and len(hb) >= 26:
+            morph_diff = bin(int(ha[18:22], 16) ^ int(hb[18:22], 16)).count('1')
+            morph_score = ((16 - morph_diff) / 16.0) * 100.0
+            env_diff = bin(int(ha[22:26], 16) ^ int(hb[22:26], 16)).count('1')
+            env_score = ((16 - env_diff) / 16.0) * 100.0
+            score = 0.70 * best_dhash_score + 0.15 * morph_score + 0.15 * env_score
+        elif len(ha) >= 22 and len(hb) >= 22:
             morph_diff = bin(int(ha[18:22], 16) ^ int(hb[18:22], 16)).count('1')
             morph_score = ((16 - morph_diff) / 16.0) * 100.0
             score = 0.80 * best_dhash_score + 0.20 * morph_score
@@ -411,15 +417,16 @@ class OCRIntegrationService:
         pares_descartados: Set[Tuple[str, int]],
         umbral_similitud: float = 75.0,
         firma_visual: str = '',
-        recortes_visuales_idx: List[Tuple[int, str, List[int]]] = None
+        recortes_visuales_idx: List[Tuple[int, str, str, List[int]]] = None,
+        firmas_descartadas: List[str] = None
     ) -> Dict[str, Any]:
         """
         Evalúa un único renglón o bloque detectado por OCR contra:
-        0. Galería histórica de recortes por trazado (RecorteImagenEstudio) — Prioridad 1 por imagen.
-        1. Filtro de ruido aprendido (renglones descartados por el personal).
-        2. Baterías/Combos (PerfilEstudioPatron) por texto o huella visual.
-        3. Alias aprendidos (EstudioAliasAprendido) por texto y similitud visual de trazo.
-        4. Catálogo maestro (Estudios) + diccionario clínico sobre el renglón y sus sub-segmentos.
+        0a. Imágenes descartadas (`es_descarte=True` en RecorteImagenEstudio) y texto descartado.
+        0b. Galería histórica de recortes por consenso multi-imagen y trazado (`RecorteImagenEstudio`).
+        1. Baterías/Combos (`PerfilEstudioPatron`) por texto o huella visual.
+        2. Alias aprendidos (`EstudioAliasAprendido`) por texto y similitud visual de trazo.
+        3. Catálogo maestro (`Estudios`) + diccionario clínico sobre el renglón y sus sub-segmentos.
         """
         texto_norm = normalizar_texto_clinico(raw_texto)
         es_manuscrito_sin_texto = (
@@ -484,30 +491,69 @@ class OCRIntegrationService:
                 if prev_seg is None or score > prev_seg[1]:
                     mejor_por_segmento[segmento_key] = (estudio.id, score)
 
-        # Paso 0: Búsqueda prioritaria por trazado/imagen en RecorteImagenEstudio (M2M)
-        if firma_norm and recortes_visuales_idx:
+        # Paso 0: Descarte visual prioritario y búsqueda por consenso multi-recorte en RecorteImagenEstudio
+        if firma_norm:
+            max_sv_descarte = 0.0
+            if firmas_descartadas:
+                for f_desc in firmas_descartadas:
+                    sv_desc = cls.calcular_similitud_visual(firma_norm, f_desc)
+                    if sv_desc > max_sv_descarte:
+                        max_sv_descarte = sv_desc
+
             mejor_recorte_id = None
             mejor_score_trazo = 0.0
             mejor_estudios_ids: List[int] = []
             coincidencias_por_estudio: Dict[int, int] = {}
+            mejor_score_por_estudio: Dict[int, float] = {}
+            mejor_recorte_por_estudio: Dict[int, int] = {}
 
-            for rec_id, firma_guardada, est_ids in recortes_visuales_idx:
-                est_ids_validos = [
-                    eid for eid in est_ids
-                    if eid in estudios_por_id and (texto_norm, eid) not in pares_descartados
-                ]
-                if not est_ids_validos:
-                    continue
+            if recortes_visuales_idx:
+                for rec_id, firma_guardada, texto_det_norm, est_ids in recortes_visuales_idx:
+                    est_ids_validos = [
+                        eid for eid in est_ids
+                        if eid in estudios_por_id and (texto_norm, eid) not in pares_descartados
+                    ]
+                    if not est_ids_validos:
+                        continue
 
-                sv = cls.calcular_similitud_visual(firma_norm, firma_guardada)
-                if sv >= 82.0:
-                    for eid in est_ids_validos:
-                        coincidencias_por_estudio[eid] = coincidencias_por_estudio.get(eid, 0) + 1
+                    sv_base = cls.calcular_similitud_visual(firma_norm, firma_guardada)
+                    sv = sv_base
+                    if (
+                        sv_base >= 78.0
+                        and not es_manuscrito_sin_texto
+                        and texto_det_norm
+                        and len(texto_norm) >= 2
+                        and fuzz.ratio(texto_norm, texto_det_norm) >= 65
+                    ):
+                        sv = min(100.0, round(sv_base + 2.5, 2))
+
+                    if sv >= 82.0:
+                        for eid in est_ids_validos:
+                            coincidencias_por_estudio[eid] = coincidencias_por_estudio.get(eid, 0) + 1
+                            if sv > mejor_score_por_estudio.get(eid, 0.0):
+                                mejor_score_por_estudio[eid] = sv
+                                mejor_recorte_por_estudio[eid] = rec_id
+
                     if sv > mejor_score_trazo:
                         mejor_score_trazo = sv
                         mejor_recorte_id = rec_id
                         mejor_estudios_ids = est_ids_validos
 
+            if max_sv_descarte >= 88.0 and max_sv_descarte >= mejor_score_trazo:
+                return {
+                    'indice': indice,
+                    'texto_renglon': raw_texto,
+                    'texto_normalizado': texto_norm,
+                    'es_ruido_aprendido': True,
+                    'combo_detectado': None,
+                    'imagen_muestra_conocida': '',
+                    'recomendados': []
+                }
+
+            estudios_consenso = [
+                eid for eid, cnt in coincidencias_por_estudio.items()
+                if cnt >= 2 and mejor_score_por_estudio.get(eid, 0.0) >= 85.0
+            ]
             if mejor_recorte_id is not None and mejor_score_trazo >= 84.0 and mejor_estudios_ids:
                 img_ganadora = (
                     RecorteImagenEstudio.objects
@@ -517,29 +563,42 @@ class OCRIntegrationService:
                     or ''
                 )
                 imagen_muestra_conocida = img_ganadora
-                for eid in mejor_estudios_ids:
+
+                eids_a_registrar = list(dict.fromkeys(mejor_estudios_ids + estudios_consenso))
+                for eid in eids_a_registrar:
+                    coincidencias = max(1, coincidencias_por_estudio.get(eid, 1))
+                    score_base_est = mejor_score_por_estudio.get(eid, mejor_score_trazo)
+                    score_con_consenso = min(100.0, round(score_base_est + min(6.0, (coincidencias - 1) * 2.0), 2))
                     _registrar_candidato(
                         estudio=estudios_por_id[eid],
-                        score=round(mejor_score_trazo, 2),
+                        score=score_con_consenso,
                         origen='MEMORIA_APRENDIDA',
-                        veces_confirmado=max(1, coincidencias_por_estudio.get(eid, 1)),
+                        veces_confirmado=coincidencias,
                         imagen_muestra=img_ganadora,
                         preseleccionado=True
                     )
-                recomendados_trazo = sorted(
-                    candidatos_por_id.values(),
-                    key=lambda c: (c['veces_confirmado'], c['similitud_score']),
-                    reverse=True
-                )
-                return {
-                    'indice': indice,
-                    'texto_renglon': raw_texto,
-                    'texto_normalizado': texto_norm,
-                    'es_ruido_aprendido': False,
-                    'combo_detectado': f"Trazo visual ({len(recomendados_trazo)} estudios)" if len(recomendados_trazo) > 1 else None,
-                    'imagen_muestra_conocida': imagen_muestra_conocida,
-                    'recomendados': recomendados_trazo
-                }
+
+                # Si la similitud de trazo es muy alta (>= 92%) o no hay texto legible, resolver directo por trazado;
+                # en franja gris (84%-91.9%) con texto legible, continuar evaluando letra para evitar falsos positivos.
+                if mejor_score_trazo >= 92.0 or es_manuscrito_sin_texto:
+                    recomendados_trazo = sorted(
+                        candidatos_por_id.values(),
+                        key=lambda c: (c['veces_confirmado'], c['similitud_score']),
+                        reverse=True
+                    )
+                    return {
+                        'indice': indice,
+                        'texto_renglon': raw_texto,
+                        'texto_normalizado': texto_norm,
+                        'es_ruido_aprendido': False,
+                        'combo_detectado': (
+                            f"Trazo visual ({len(recomendados_trazo)} estudios)"
+                            if len(recomendados_trazo) > 1
+                            else None
+                        ),
+                        'imagen_muestra_conocida': imagen_muestra_conocida,
+                        'recomendados': recomendados_trazo
+                    }
 
         # Paso 1: Baterías / Combos (PerfilEstudioPatron) por texto y respaldo por huella visual
         patron_combo = None
@@ -816,23 +875,34 @@ class OCRIntegrationService:
     def aplicar_boosting_contextual(
         cls,
         sugerencias: List[Dict[str, Any]],
-        renglones: List[Dict[str, Any]] = None
+        renglones: List[Dict[str, Any]] = None,
+        grafo_afinidad: Dict[int, Set[int]] = None
     ) -> None:
         """
-        Fase C: Desambiguación Contextual. Si hay estudios con alta certeza (anclas >= 85%),
-        eleva la puntuación de estudios dudosos (55% - 84%) que estadísticamente co-ocurren con ellos.
+        Fase C: Desambiguación Contextual y Poda con Grafo Clínico.
+        1. Identifica nodos ancla (>= 82% o de fuentes confiables).
+        2. Impulsa candidatos dudosos conectados con alta afinidad (>= 0.60).
+        3. Poda candidatos débiles (< 80% OCR_DIRECTO) desconectados del vecindario clínico del grafo.
         """
-        anclas_set: Set[int] = {s['id_estudio'] for s in sugerencias if s['similitud_score'] >= 85.0}
+        anclas_set: Set[int] = {s['id_estudio'] for s in sugerencias if s['similitud_score'] >= 82.0}
         if renglones:
             for renglon in renglones:
                 if renglon.get('es_ruido_aprendido'):
                     continue
                 for rec in renglon.get('recomendados', []):
-                    if rec.get('similitud_score', 0.0) >= 85.0:
+                    if (
+                        rec.get('similitud_score', 0.0) >= 82.0
+                        or rec.get('origen_deteccion') in ('COMBO_RUTINA', 'MEMORIA_APRENDIDA', 'VISION_IA')
+                    ):
                         anclas_set.add(rec['id_estudio'])
 
         if not anclas_set:
             return
+
+        vecinos_grafo: Set[int] = set()
+        if grafo_afinidad:
+            for aid in anclas_set:
+                vecinos_grafo.update(grafo_afinidad.get(aid, set()))
 
         try:
             coocurrencias = list(
@@ -841,10 +911,11 @@ class OCRIntegrationService:
                     indice_afinidad__gte=0.60
                 )
             )
+            ids_con_alta_afinidad = {c.estudio_b_id for c in coocurrencias}
         except Exception:
-            return
+            ids_con_alta_afinidad = set()
 
-        ids_con_alta_afinidad = {c.estudio_b_id for c in coocurrencias}
+        vecinos_validos = vecinos_grafo | ids_con_alta_afinidad
 
         for sug in sugerencias:
             if 55.0 <= sug['similitud_score'] < 85.0 and sug['id_estudio'] in ids_con_alta_afinidad:
@@ -865,6 +936,19 @@ class OCRIntegrationService:
                         if not tenia_preseleccionado:
                             rec['preseleccionado'] = True
                             tenia_preseleccionado = True
+
+                # Poda por Grafo Clínico: evitar mostrar alternativos/alucinaciones débiles (< 80%) sin relación en el grafo
+                if vecinos_validos:
+                    recs = [
+                        rec for rec in recs
+                        if not (
+                            rec.get('similitud_score', 0.0) < 80.0
+                            and rec.get('origen_deteccion', 'OCR_DIRECTO') == 'OCR_DIRECTO'
+                            and rec['id_estudio'] not in anclas_set
+                            and rec['id_estudio'] not in vecinos_validos
+                        )
+                    ]
+
                 recs.sort(
                     key=lambda c: (
                         1 if c.get('preseleccionado') else 0,
@@ -873,6 +957,7 @@ class OCRIntegrationService:
                     ),
                     reverse=True
                 )
+                renglon['recomendados'] = recs
 
     @classmethod
     def obtener_sugerencias_contextuales(
@@ -962,11 +1047,11 @@ class OCRIntegrationService:
         catalogo_nombres = [est.nombre for est in estudios_activos[:200] if est and est.nombre]
         prompt = (
             "Eres un asistente bioquímico experto en leer órdenes médicas manuscritas en cursiva en español. "
-            "Para cada imagen de recorte numerada por 'indice', transcribe qué estudios de laboratorio solicita "
-            "apoyándote en los nombres del catálogo activo cuando corresponda. "
+            "Para cada imagen de recorte numerada por 'indice', transcribe literalmente qué dice el papel ('texto') "
+            "y además selecciona los nombres exactos de los estudios del catálogo activo que corresponden ('estudios_catalogo'). "
             f"Catálogo activo: {', '.join(catalogo_nombres)}. "
             "Responde ÚNICAMENTE JSON válido con este formato exacto: "
-            '{"resultados": [{"indice": <int>, "texto": "<estudio(s) detectado(s) o vacio si no es estudio>"}]}.'
+            '{"resultados": [{"indice": <int>, "texto": "<texto transcrito o vacio>", "estudios_catalogo": ["<nombre exacto del catalogo>"]}]}'
         )
 
         raw_content = ''
@@ -1059,8 +1144,24 @@ class OCRIntegrationService:
                     continue
                 idx_val = entry.get('indice')
                 txt_val = str(entry.get('texto') or '').strip()
-                if str(idx_val).isdigit() and int(idx_val) in indices_esperados and len(txt_val) >= 2:
-                    salida[int(idx_val)] = txt_val
+                cat_list = entry.get('estudios_catalogo')
+                partes_combinadas: List[str] = []
+                vistos_norm: Set[str] = set()
+                if len(txt_val) >= 2:
+                    t_norm = normalizar_texto_clinico(txt_val)
+                    partes_combinadas.append(txt_val)
+                    if t_norm:
+                        vistos_norm.add(t_norm)
+                if isinstance(cat_list, list):
+                    for cat_item in cat_list:
+                        cat_txt = str(cat_item or '').strip()
+                        cat_norm = normalizar_texto_clinico(cat_txt)
+                        if len(cat_txt) >= 2 and cat_norm not in vistos_norm:
+                            vistos_norm.add(cat_norm)
+                            partes_combinadas.append(cat_txt)
+                combined_txt = ' ; '.join(partes_combinadas)
+                if str(idx_val).isdigit() and int(idx_val) in indices_esperados and len(combined_txt) >= 2:
+                    salida[int(idx_val)] = combined_txt
             return salida
         except Exception as exc:
             logger.warning("Asistente de Visión IA (%s) no pudo transcribir bloques dudosos: %s", provider, exc)
@@ -1075,9 +1176,11 @@ class OCRIntegrationService:
         Set[Tuple[str, int]],
         List[EstudioAliasAprendido],
         List[Estudios],
-        List[Tuple[int, str, List[int]]]
+        List[Tuple[int, str, str, List[int]]],
+        List[str],
+        Dict[int, Set[int]]
     ]:
-        """Carga patrones de baterías, descartes, alias aprendidos, estudios activos e índice liviano de recortes visuales."""
+        """Carga baterías, descartes (texto e imagen), alias, estudios, índice de recortes y grafo clínico."""
         try:
             patrones_activos = list(PerfilEstudioPatron.objects.filter(activo=True))
         except Exception as e:
@@ -1105,24 +1208,50 @@ class OCRIntegrationService:
 
         estudios_activos = list(Estudios.objects.filter(activo=True))
 
-        recortes_visuales_idx: List[Tuple[int, str, List[int]]] = []
+        recortes_visuales_idx: List[Tuple[int, str, str, List[int]]] = []
+        firmas_descartadas: List[str] = []
         try:
             recortes_raw = list(
-                RecorteImagenEstudio.objects.exclude(firma_visual='')
+                RecorteImagenEstudio.objects.filter(es_descarte=False)
+                .exclude(firma_visual='')
                 .order_by('-fecha_registro', '-id')
-                .values_list('id', 'firma_visual')
+                .values_list('id', 'firma_visual', 'texto_detectado')
             )
             if recortes_raw:
                 estudios_por_recorte: Dict[int, List[int]] = {}
                 for rec_id, est_id in RecorteEstudio.objects.values_list('recorte_id', 'estudio_id'):
                     estudios_por_recorte.setdefault(rec_id, []).append(est_id)
                 recortes_visuales_idx = [
-                    (rec_id, firma_v, estudios_por_recorte[rec_id])
-                    for rec_id, firma_v in recortes_raw
+                    (rec_id, firma_v, normalizar_texto_clinico(texto_det), estudios_por_recorte[rec_id])
+                    for rec_id, firma_v, texto_det in recortes_raw
                     if rec_id in estudios_por_recorte
                 ]
+            firmas_descartadas = list(
+                RecorteImagenEstudio.objects.filter(es_descarte=True)
+                .exclude(firma_visual='')
+                .values_list('firma_visual', flat=True)
+            )
         except Exception as e:
             logger.warning("No se pudo consultar RecorteImagenEstudio: %s", e)
+
+        # Grafo Clínico: conecta estudios que comparten batería o co-ocurrencia estadística (>= 0.50)
+        grafo_afinidad: Dict[int, Set[int]] = {}
+        for patron in patrones_activos:
+            ids_patron = [eid for eid in (patron.estudios_ids or []) if isinstance(eid, int)]
+            if len(ids_patron) >= 2:
+                for a_id in ids_patron:
+                    vecinos = grafo_afinidad.setdefault(a_id, set())
+                    for b_id in ids_patron:
+                        if a_id != b_id:
+                            vecinos.add(b_id)
+        try:
+            for a_id, b_id in CoocurrenciaEstudio.objects.filter(indice_afinidad__gte=0.50).values_list(
+                'estudio_a_id', 'estudio_b_id'
+            ):
+                grafo_afinidad.setdefault(a_id, set()).add(b_id)
+                grafo_afinidad.setdefault(b_id, set()).add(a_id)
+        except Exception as e:
+            logger.warning("No se pudo construir aristas de CoocurrenciaEstudio para grafo: %s", e)
 
         return (
             patrones_activos,
@@ -1131,6 +1260,8 @@ class OCRIntegrationService:
             alias_activos,
             estudios_activos,
             recortes_visuales_idx,
+            firmas_descartadas,
+            grafo_afinidad,
         )
 
     @classmethod
@@ -1155,6 +1286,8 @@ class OCRIntegrationService:
             pares_descartados,
             alias_activos,
             estudios_activos,
+            _,
+            _,
             _,
         ) = cls._cargar_contexto_mapeo()
 
@@ -1272,6 +1405,8 @@ class OCRIntegrationService:
             alias_activos,
             estudios_activos,
             recortes_visuales_idx,
+            firmas_descartadas,
+            grafo_afinidad,
         ) = cls._cargar_contexto_mapeo()
 
         renglones: List[Dict[str, Any]] = []
@@ -1287,7 +1422,8 @@ class OCRIntegrationService:
                 pares_descartados=pares_descartados,
                 umbral_similitud=float(umbral_similitud),
                 firma_visual=firma_visual,
-                recortes_visuales_idx=recortes_visuales_idx
+                recortes_visuales_idx=recortes_visuales_idx,
+                firmas_descartadas=firmas_descartadas
             )
             renglones.append(renglon_eval)
 
@@ -1301,7 +1437,7 @@ class OCRIntegrationService:
             if es_dudoso and recorte_url and recorte_url.startswith('data:image/'):
                 recortes_dudosos.append((idx, raw_texto, recorte_url))
 
-        # Paso 5: Asistente híbrido gratuito de Visión IA solo para bloques dudosos con recorte
+        # Paso 5: Asistente híbrido gratuito de Visión IA solo para bloques dudosos con recorte (fusionando sin pisar)
         if recortes_dudosos:
             transcripciones_ia = cls._transcribir_recortes_con_vision_ia(recortes_dudosos, estudios_activos)
             for idx_ia, texto_ia in transcripciones_ia.items():
@@ -1317,14 +1453,28 @@ class OCRIntegrationService:
                     umbral_similitud=float(umbral_similitud),
                     firma_visual=firma_visual
                 )
+                prev_renglon = renglones[idx_ia]
+                prev_recs = {r['id_estudio']: dict(r) for r in prev_renglon.get('recomendados', [])}
                 for rec in renglon_ia.get('recomendados', []):
                     if rec.get('origen_deteccion') == 'OCR_DIRECTO':
                         rec['origen_deteccion'] = 'VISION_IA'
-                if renglon_ia.get('recomendados'):
-                    renglones[idx_ia] = renglon_ia
+                    est_id = rec['id_estudio']
+                    existing = prev_recs.get(est_id)
+                    if existing is None or rec['similitud_score'] >= existing['similitud_score']:
+                        prev_recs[est_id] = rec
+                if prev_recs:
+                    merged_recs = sorted(
+                        prev_recs.values(),
+                        key=lambda c: (1 if c.get('preseleccionado') else 0, c.get('similitud_score', 0.0)),
+                        reverse=True
+                    )
+                    renglones[idx_ia] = {
+                        **renglon_ia,
+                        'recomendados': merged_recs
+                    }
 
-        # Boosting contextual sobre los candidatos por renglón
-        cls.aplicar_boosting_contextual([], renglones=renglones)
+        # Boosting contextual y poda con Grafo Clínico sobre los candidatos por renglón
+        cls.aplicar_boosting_contextual([], renglones=renglones, grafo_afinidad=grafo_afinidad)
 
         # Consolidar lista plana de sugerencias deduplicadas manteniendo retrocompatibilidad
         sugerencias_por_id: Dict[int, Dict[str, Any]] = {}
@@ -1438,14 +1588,16 @@ class OCRIntegrationService:
         estudios_confirmados_ids: List[int] = None,
         asociaciones_directas: List[Dict[str, Any]] = None,
         renglones_confirmados: List[Dict[str, Any]] = None,
-        lineas_descartadas: List[str] = None
+        lineas_descartadas: List[str] = None,
+        recortes_descartados: List[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Ingesta asíncrona de aprendizaje activo:
         1. Procesa renglones confirmados con su imagen recortada:
-           - 1 estudio -> crea/refuerza EstudioAliasAprendido con imagen_muestra.
-           - >=2 estudios -> crea/refuerza PerfilEstudioPatron con imagen_muestra y sub-segmentos si aplica.
-        2. Marca renglones descartados como ruido ('DESCARTADO') para filtrarlos en futuros escaneos.
+           - Guarda siempre cada recorte en RecorteImagenEstudio vinculado por RecorteEstudio (M2M) a los 1..N estudios.
+           - 1 estudio -> crea/refuerza EstudioAliasAprendido.
+           - >=2 estudios -> crea/refuerza PerfilEstudioPatron y asocia sub-segmentos / alias.
+        2. Marca renglones y recortes visuales descartados como ruido ('DESCARTADO' / es_descarte=True).
         3. Mantiene compatibilidad con asociaciones_directas y lineas_origen.
         4. Actualiza la matriz de CoocurrenciaEstudio para todos los IDs confirmados del ticket.
         """
@@ -1453,6 +1605,7 @@ class OCRIntegrationService:
         asociaciones_directas = asociaciones_directas or []
         renglones_confirmados = renglones_confirmados or []
         lineas_descartadas = lineas_descartadas or []
+        recortes_descartados = recortes_descartados or []
 
         todos_ids_set: Set[int] = {
             int(i) for i in (estudios_confirmados_ids or []) if str(i).isdigit()
@@ -1621,6 +1774,25 @@ class OCRIntegrationService:
                     confianza_score=0.0,
                     veces_confirmado=1
                 )
+            total_descartados += 1
+
+        # 2b. Guardar imágenes descartadas (es_descarte=True) para bloquear ruido visual (firmas, sellos, datos filiatorios)
+        descartes_visuales_vistos: Set[str] = set()
+        for item_desc in recortes_descartados:
+            if not isinstance(item_desc, dict):
+                continue
+            raw_desc = item_desc.get('texto', '')
+            imagen_desc = cls._limpiar_imagen_muestra(item_desc.get('imagen_muestra'))
+            vhash_desc = cls._extraer_vhash(imagen_desc)
+            if not imagen_desc or imagen_desc in descartes_visuales_vistos:
+                continue
+            descartes_visuales_vistos.add(imagen_desc)
+            RecorteImagenEstudio.objects.create(
+                firma_visual=vhash_desc or '',
+                texto_detectado=str(raw_desc or '')[:255],
+                imagen_muestra=imagen_desc,
+                es_descarte=True
+            )
             total_descartados += 1
 
         # 3. Compatibilidad con asociaciones_directas heredadas

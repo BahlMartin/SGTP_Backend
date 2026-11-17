@@ -693,5 +693,91 @@ class OCRIntegrationTestCase(TestCase):
         for r in recs:
             self.assertEqual(r['origen_deteccion'], 'MEMORIA_APRENDIDA')
 
+    @override_settings(OCR_VISION_API_KEY='test-gemini-free-key', OCR_VISION_PROVIDER='gemini', OCR_VISION_MODEL='gemini-3.5-flash')
+    @patch('requests.post')
+    def test_descarte_visual_vhash_26_grafo_clinico_y_gemini_dual(self, mock_post):
+        """Valida descarte por imagen (es_descarte=True), firma 26-hex, poda por grafo y respuesta dual Gemini."""
+        vhash_26_a = 'a5a5a5a5a5a5a5a524f3c1aaaa'
+        vhash_26_b = 'a5a5a5a5a5a5a5a524f3c15555'  # Mismo dHash y morfología, ascendentes vs descendentes opuestos (85.0 < 90.0)
+        self.assertEqual(OCRIntegrationService.calcular_similitud_visual(vhash_26_a, vhash_26_a), 100.0)
+        self.assertLess(OCRIntegrationService.calcular_similitud_visual(vhash_26_a, vhash_26_b), 90.0)
+
+        # 1. Descarte por imagen: registrar una firma o sello como ruido visual (es_descarte=True)
+        crop_sello = f"data:image/webp;vhash={vhash_26_a};base64,UklGRh4AAABXRUJQVlA4TBEAAAAvAAAAAAfQ//73v/+BiOh/AAA="
+        fb_desc = OCRIntegrationService.registrar_retroalimentacion(
+            recortes_descartados=[{'texto': 'Firma Dr. Perez', 'imagen_muestra': crop_sello}]
+        )
+        self.assertGreaterEqual(fb_desc['descartados_procesados'], 1)
+        self.assertTrue(RecorteImagenEstudio.objects.filter(firma_visual=vhash_26_a, es_descarte=True).exists())
+
+        # Aunque PaddleOCR lea otro texto distinto la próxima vez sobre la misma imagen de sello, debe descartarse
+        mapeo_sello = OCRIntegrationService.mapear_textos_con_estudios(
+            textos_detectados=['Dr. Juan x'],
+            firmas_visuales=[vhash_26_a]
+        )
+        self.assertTrue(mapeo_sello['renglones'][0]['es_ruido_aprendido'])
+        self.assertEqual(mapeo_sello['renglones'][0]['recomendados'], [])
+
+        # 2. Grafo clínico: Test de Embarazo (ancla) conectado con Hemograma, pero NO con Hepatitis B
+        est_embarazo = Estudios.objects.create(
+            codigo_practica='EMB-01',
+            nombre='Test de Embarazo Subunidad Beta',
+            tipo_muestra=TipoMuestra.SANGRE,
+            activo=True
+        )
+        est_hepb = Estudios.objects.create(
+            codigo_practica='HEPB-01',
+            nombre='Hepatitis B Antígeno Australiano',
+            tipo_muestra=TipoMuestra.SANGRE,
+            activo=True
+        )
+        CoocurrenciaEstudio.objects.create(
+            estudio_a_id=est_embarazo.id,
+            estudio_b_id=self.estudio_hemo.id,
+            veces_juntos=5,
+            indice_afinidad=0.80
+        )
+
+        # 'Hepatit' (< 80% OCR_DIRECTO) sobre Hepatitis B está desconectado de Test de Embarazo en el grafo -> se poda
+        mapeo_grafo = OCRIntegrationService.mapear_textos_con_estudios([
+            'Test de Embarazo Subunidad Beta',
+            'Hematito'  # texto ambiguo ~60-74% sobre Hepatitis B vs Hemograma
+        ])
+        ids_r1 = [r['id_estudio'] for r in mapeo_grafo['renglones'][1]['recomendados']]
+        self.assertNotIn(est_hepb.id, ids_r1)
+
+        # 3. Gemini respuesta dual ('texto' literal + 'estudios_catalogo' exactos)
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            'candidates': [{
+                'content': {
+                    'parts': [{
+                        'text': json.dumps({
+                            'resultados': [{
+                                'indice': 0,
+                                'texto': 'Control Prenatal',
+                                'estudios_catalogo': [est_embarazo.nombre, self.estudio_hemo.nombre]
+                            }]
+                        })
+                    }]
+                }
+            }]
+        }
+        mock_post.return_value = mock_resp
+
+        res_ia = OCRIntegrationService.interpretar_recortes_seleccionados([
+            {
+                'indice': 0,
+                'texto_ocr': '[Manuscrito a revisar]',
+                'firma_visual': '',
+                'imagen_recorte': crop_sello
+            }
+        ])
+        ids_ia = {r['id_estudio'] for r in res_ia[0]['recomendados']}
+        self.assertIn(est_embarazo.id, ids_ia)
+        self.assertIn(self.estudio_hemo.id, ids_ia)
+
+
 
 
