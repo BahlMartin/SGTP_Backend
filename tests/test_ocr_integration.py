@@ -14,7 +14,9 @@ from app.models.studies import (
     TipoMuestra,
     EstudioAliasAprendido,
     PerfilEstudioPatron,
-    CoocurrenciaEstudio
+    CoocurrenciaEstudio,
+    RecorteImagenEstudio,
+    RecorteEstudio
 )
 from app.services.ocr_service import OCRIntegrationService
 
@@ -617,5 +619,79 @@ class OCRIntegrationTestCase(TestCase):
             r['id_estudio'] == est_prot.id and r['origen_deteccion'] == 'MEMORIA_APRENDIDA' and r['preseleccionado']
             for r in mapeo_local['renglones'][1]['recomendados']
         ))
+
+    def test_galeria_recortes_multiples_por_estudio_y_prioridad_trazado(self):
+        """Valida galería M2M histórica por estudio (sin sobrescribir), 3 estudios por recorte y prioridad por trazado."""
+        crop_hemo_1 = "data:image/webp;vhash=101010101010101020aaaa;base64,UklGRh4AAABXRUJQVlA4TBEAAAAvAAAAAAfQ//73v/+BiOh/AAA="
+        crop_hemo_2 = "data:image/webp;vhash=020202020202020220bbbb;base64,UklGRh4AAABXRUJQVlA4TBEAAAAvAAAAAAfQ//73v/+BiOh/BBB="
+
+        # 1. Confirmar dos recetas distintas para Hemograma (ambas dicen "Hemograma" y otra "Hto"): debe acumular ambas imágenes
+        r1 = OCRIntegrationService.registrar_retroalimentacion(
+            renglones_confirmados=[
+                {'texto': 'Hemograma', 'estudios_ids': [self.estudio_hemo.id], 'imagen_muestra': crop_hemo_1}
+            ]
+        )
+        r2 = OCRIntegrationService.registrar_retroalimentacion(
+            renglones_confirmados=[
+                {'texto': 'Hemograma', 'estudios_ids': [self.estudio_hemo.id], 'imagen_muestra': crop_hemo_2}
+            ]
+        )
+        r3 = OCRIntegrationService.registrar_retroalimentacion(
+            renglones_confirmados=[
+                {'texto': 'Hto completo', 'estudios_ids': [self.estudio_hemo.id], 'imagen_muestra': crop_hemo_2}
+            ]
+        )
+        self.assertEqual(r1['recortes_guardados'], 1)
+        self.assertEqual(r2['recortes_guardados'], 1)
+        self.assertEqual(r3['recortes_guardados'], 1)
+        # Hemograma acumula las 3 confirmaciones visuales históricas sin pisar la primera
+        self.assertEqual(self.estudio_hemo.recortes_visuales.count(), 3)
+        muestras_guardadas = set(self.estudio_hemo.recortes_visuales.values_list('imagen_muestra', flat=True))
+        self.assertEqual(muestras_guardadas, {crop_hemo_1, crop_hemo_2})
+        # Y conserva los textos patrón distintos asociados al estudio
+        self.assertTrue(
+            EstudioAliasAprendido.objects.filter(estudio=self.estudio_hemo, texto_patron='hemograma').exists()
+        )
+        self.assertTrue(
+            EstudioAliasAprendido.objects.filter(estudio=self.estudio_hemo, texto_patron='hto completo').exists()
+        )
+
+        # 2. Confirmar 1 recorte seleccionando 3 estudios a la vez: referencia única M2M a los 3 + texto_patron en los 3
+        vhash_multi = 'f0f0f0f0f0f0f0f02455aa'
+        crop_multi = f"data:image/webp;vhash={vhash_multi};base64,UklGRh4AAABXRUJQVlA4TBEAAAAvAAAAAAfQ//73v/+BiOh/CCC="
+        resp_multi = OCRIntegrationService.registrar_retroalimentacion(
+            renglones_confirmados=[
+                {
+                    'texto': 'Panel basal x3',
+                    'estudios_ids': [self.estudio_hemo.id, self.estudio_glucemia.id, self.estudio_orina.id],
+                    'imagen_muestra': crop_multi
+                }
+            ]
+        )
+        self.assertEqual(resp_multi['recortes_guardados'], 1)
+
+        recorte_multi = RecorteImagenEstudio.objects.filter(firma_visual=vhash_multi).first()
+        self.assertIsNotNone(recorte_multi)
+        self.assertEqual(RecorteEstudio.objects.filter(recorte=recorte_multi).count(), 3)
+        self.assertEqual(
+            set(recorte_multi.estudios.values_list('id', flat=True)),
+            {self.estudio_hemo.id, self.estudio_glucemia.id, self.estudio_orina.id}
+        )
+        for est in (self.estudio_hemo, self.estudio_glucemia, self.estudio_orina):
+            self.assertTrue(
+                EstudioAliasAprendido.objects.filter(estudio=est, texto_patron='panel basal x3').exists()
+            )
+
+        # 3. Escaneo posterior: prioridad 1 por trazado encuentra los 3 estudios asociados incluso con texto ilegible
+        mapeo_trazo = OCRIntegrationService.mapear_textos_con_estudios(
+            textos_detectados=['garabato ilegible xyz'],
+            firmas_visuales=[vhash_multi]
+        )
+        recs = mapeo_trazo['renglones'][0]['recomendados']
+        ids_presel = {r['id_estudio'] for r in recs if r['preseleccionado']}
+        self.assertEqual(ids_presel, {self.estudio_hemo.id, self.estudio_glucemia.id, self.estudio_orina.id})
+        for r in recs:
+            self.assertEqual(r['origen_deteccion'], 'MEMORIA_APRENDIDA')
+
 
 

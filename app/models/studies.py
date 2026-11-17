@@ -218,6 +218,77 @@ class CoocurrenciaEstudio(models.Model):
         return f"Estudio {self.estudio_a_id} + {self.estudio_b_id}: {self.veces_juntos} veces"
 
 
+class RecorteImagenEstudio(models.Model):
+    """
+    Galería Histórica de Recortes Manuscritos (3FN): Almacena una sola vez cada recorte visual
+    confirmado junto con su huella morfológica de trazado (22-hex).
+    """
+    id = models.AutoField(primary_key=True)
+    estudios = models.ManyToManyField(
+        Estudios,
+        through='RecorteEstudio',
+        related_name='recortes_visuales',
+        verbose_name="Estudios Asociados al Recorte"
+    )
+    firma_visual = models.CharField(
+        max_length=32,
+        db_index=True,
+        blank=True,
+        default='',
+        verbose_name="Huella de Trazado Perceptual (22-hex)"
+    )
+    texto_detectado = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        verbose_name="Texto Leído en el Recorte"
+    )
+    imagen_muestra = models.TextField(
+        verbose_name="Recorte de Imagen del Renglón (Base64 WebP)"
+    )
+    fecha_registro = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        db_table = 'sgtp_recortes_imagen'
+        verbose_name = 'Recorte Visual de Estudio'
+        verbose_name_plural = 'Galería de Recortes Visuales'
+        ordering = ['-fecha_registro']
+
+    def __str__(self) -> str:
+        return f"Recorte #{self.id} ({self.firma_visual[:12] or 'sin-hash'}) - '{self.texto_detectado[:30]}'"
+
+
+class RecorteEstudio(models.Model):
+    """
+    Tabla intermedia explícita (N:M normalizada en 3FN) que vincula cada recorte visual
+    con los 1, 2, 3 o más estudios seleccionados sin duplicar la imagen en Base64.
+    """
+    id = models.AutoField(primary_key=True)
+    recorte = models.ForeignKey(
+        RecorteImagenEstudio,
+        on_delete=models.CASCADE,
+        related_name='asociaciones_estudios',
+        verbose_name="Recorte Visual"
+    )
+    estudio = models.ForeignKey(
+        Estudios,
+        on_delete=models.CASCADE,
+        related_name='asociaciones_recortes',
+        verbose_name="Estudio Asociado"
+    )
+    fecha_asociacion = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'sgtp_estudios_recortes'
+        verbose_name = 'Asociación Recorte - Estudio'
+        verbose_name_plural = 'Asociaciones Recorte - Estudio'
+        unique_together = ('recorte', 'estudio')
+        ordering = ['id']
+
+    def __str__(self) -> str:
+        return f"Recorte #{self.recorte_id} -> {self.estudio.nombre}"
+
+
 # Alias arquitectónico estándar Item
 Item = Estudios
 CatalogItem = Estudios
@@ -226,6 +297,8 @@ CatalogItem = Estudios
 auditlog.register(Estudios)
 auditlog.register(EstudioAliasAprendido)
 auditlog.register(PerfilEstudioPatron)
+auditlog.register(RecorteImagenEstudio)
+auditlog.register(RecorteEstudio)
 
 __all__ = [
     'TipoMuestra',
@@ -235,6 +308,8 @@ __all__ = [
     'EstudioAliasAprendido',
     'PerfilEstudioPatron',
     'CoocurrenciaEstudio',
+    'RecorteImagenEstudio',
+    'RecorteEstudio',
     'Item',
     'CatalogItem',
 ]

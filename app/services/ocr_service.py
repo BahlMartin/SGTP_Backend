@@ -22,7 +22,9 @@ from app.models.studies import (
     Estudios,
     EstudioAliasAprendido,
     PerfilEstudioPatron,
-    CoocurrenciaEstudio
+    CoocurrenciaEstudio,
+    RecorteImagenEstudio,
+    RecorteEstudio
 )
 
 logger = logging.getLogger(__name__)
@@ -408,10 +410,12 @@ class OCRIntegrationService:
         textos_descartados_globales: Set[str],
         pares_descartados: Set[Tuple[str, int]],
         umbral_similitud: float = 75.0,
-        firma_visual: str = ''
+        firma_visual: str = '',
+        recortes_visuales_idx: List[Tuple[int, str, List[int]]] = None
     ) -> Dict[str, Any]:
         """
         Evalúa un único renglón o bloque detectado por OCR contra:
+        0. Galería histórica de recortes por trazado (RecorteImagenEstudio) — Prioridad 1 por imagen.
         1. Filtro de ruido aprendido (renglones descartados por el personal).
         2. Baterías/Combos (PerfilEstudioPatron) por texto o huella visual.
         3. Alias aprendidos (EstudioAliasAprendido) por texto y similitud visual de trazo.
@@ -479,6 +483,63 @@ class OCRIntegrationService:
                 prev_seg = mejor_por_segmento.get(segmento_key)
                 if prev_seg is None or score > prev_seg[1]:
                     mejor_por_segmento[segmento_key] = (estudio.id, score)
+
+        # Paso 0: Búsqueda prioritaria por trazado/imagen en RecorteImagenEstudio (M2M)
+        if firma_norm and recortes_visuales_idx:
+            mejor_recorte_id = None
+            mejor_score_trazo = 0.0
+            mejor_estudios_ids: List[int] = []
+            coincidencias_por_estudio: Dict[int, int] = {}
+
+            for rec_id, firma_guardada, est_ids in recortes_visuales_idx:
+                est_ids_validos = [
+                    eid for eid in est_ids
+                    if eid in estudios_por_id and (texto_norm, eid) not in pares_descartados
+                ]
+                if not est_ids_validos:
+                    continue
+
+                sv = cls.calcular_similitud_visual(firma_norm, firma_guardada)
+                if sv >= 82.0:
+                    for eid in est_ids_validos:
+                        coincidencias_por_estudio[eid] = coincidencias_por_estudio.get(eid, 0) + 1
+                    if sv > mejor_score_trazo:
+                        mejor_score_trazo = sv
+                        mejor_recorte_id = rec_id
+                        mejor_estudios_ids = est_ids_validos
+
+            if mejor_recorte_id is not None and mejor_score_trazo >= 84.0 and mejor_estudios_ids:
+                img_ganadora = (
+                    RecorteImagenEstudio.objects
+                    .filter(id=mejor_recorte_id)
+                    .values_list('imagen_muestra', flat=True)
+                    .first()
+                    or ''
+                )
+                imagen_muestra_conocida = img_ganadora
+                for eid in mejor_estudios_ids:
+                    _registrar_candidato(
+                        estudio=estudios_por_id[eid],
+                        score=round(mejor_score_trazo, 2),
+                        origen='MEMORIA_APRENDIDA',
+                        veces_confirmado=max(1, coincidencias_por_estudio.get(eid, 1)),
+                        imagen_muestra=img_ganadora,
+                        preseleccionado=True
+                    )
+                recomendados_trazo = sorted(
+                    candidatos_por_id.values(),
+                    key=lambda c: (c['veces_confirmado'], c['similitud_score']),
+                    reverse=True
+                )
+                return {
+                    'indice': indice,
+                    'texto_renglon': raw_texto,
+                    'texto_normalizado': texto_norm,
+                    'es_ruido_aprendido': False,
+                    'combo_detectado': f"Trazo visual ({len(recomendados_trazo)} estudios)" if len(recomendados_trazo) > 1 else None,
+                    'imagen_muestra_conocida': imagen_muestra_conocida,
+                    'recomendados': recomendados_trazo
+                }
 
         # Paso 1: Baterías / Combos (PerfilEstudioPatron) por texto y respaldo por huella visual
         patron_combo = None
@@ -1013,9 +1074,10 @@ class OCRIntegrationService:
         Set[str],
         Set[Tuple[str, int]],
         List[EstudioAliasAprendido],
-        List[Estudios]
+        List[Estudios],
+        List[Tuple[int, str, List[int]]]
     ]:
-        """Carga patrones de baterías, descartes, alias aprendidos y estudios activos desde la BD."""
+        """Carga patrones de baterías, descartes, alias aprendidos, estudios activos e índice liviano de recortes visuales."""
         try:
             patrones_activos = list(PerfilEstudioPatron.objects.filter(activo=True))
         except Exception as e:
@@ -1042,7 +1104,34 @@ class OCRIntegrationService:
             logger.warning("No se pudo consultar EstudioAliasAprendido: %s", e)
 
         estudios_activos = list(Estudios.objects.filter(activo=True))
-        return patrones_activos, textos_descartados_globales, pares_descartados, alias_activos, estudios_activos
+
+        recortes_visuales_idx: List[Tuple[int, str, List[int]]] = []
+        try:
+            recortes_raw = list(
+                RecorteImagenEstudio.objects.exclude(firma_visual='')
+                .order_by('-fecha_registro', '-id')
+                .values_list('id', 'firma_visual')
+            )
+            if recortes_raw:
+                estudios_por_recorte: Dict[int, List[int]] = {}
+                for rec_id, est_id in RecorteEstudio.objects.values_list('recorte_id', 'estudio_id'):
+                    estudios_por_recorte.setdefault(rec_id, []).append(est_id)
+                recortes_visuales_idx = [
+                    (rec_id, firma_v, estudios_por_recorte[rec_id])
+                    for rec_id, firma_v in recortes_raw
+                    if rec_id in estudios_por_recorte
+                ]
+        except Exception as e:
+            logger.warning("No se pudo consultar RecorteImagenEstudio: %s", e)
+
+        return (
+            patrones_activos,
+            textos_descartados_globales,
+            pares_descartados,
+            alias_activos,
+            estudios_activos,
+            recortes_visuales_idx,
+        )
 
     @classmethod
     def interpretar_recortes_seleccionados(
@@ -1066,6 +1155,7 @@ class OCRIntegrationService:
             pares_descartados,
             alias_activos,
             estudios_activos,
+            _,
         ) = cls._cargar_contexto_mapeo()
 
         recortes_tuplas: List[Tuple[int, str, str]] = []
@@ -1181,6 +1271,7 @@ class OCRIntegrationService:
             pares_descartados,
             alias_activos,
             estudios_activos,
+            recortes_visuales_idx,
         ) = cls._cargar_contexto_mapeo()
 
         renglones: List[Dict[str, Any]] = []
@@ -1195,7 +1286,8 @@ class OCRIntegrationService:
                 textos_descartados_globales=textos_descartados_globales,
                 pares_descartados=pares_descartados,
                 umbral_similitud=float(umbral_similitud),
-                firma_visual=firma_visual
+                firma_visual=firma_visual,
+                recortes_visuales_idx=recortes_visuales_idx
             )
             renglones.append(renglon_eval)
 
@@ -1378,8 +1470,10 @@ class OCRIntegrationService:
         total_alias_actualizados = 0
         total_baterias_actualizadas = 0
         total_descartados = 0
+        total_recortes_guardados = 0
+        recortes_guardados_lote: Set[Tuple[str, Tuple[int, ...]]] = set()
 
-        # 1. Procesar renglones confirmados con aprendizaje dual automático
+        # 1. Procesar renglones confirmados guardando siempre la galería histórica y alias léxicos
         patrones_activos = list(PerfilEstudioPatron.objects.filter(activo=True))
         for item in renglones_confirmados:
             raw_t = item.get('texto', '')
@@ -1388,12 +1482,12 @@ class OCRIntegrationService:
             es_manuscrito_sin_texto = str(raw_t or '').strip().lower() == '[manuscrito a revisar]'
 
             if es_manuscrito_sin_texto:
-                if not vhash_item:
+                if not vhash_item and not imagen_str:
                     continue
-                texto_norm = f"vhash {vhash_item}"
+                texto_norm = f"vhash {vhash_item}" if vhash_item else ''
             else:
                 texto_norm = normalizar_texto_clinico(raw_t)
-                if len(texto_norm) < 2:
+                if len(texto_norm) < 2 and not imagen_str:
                     continue
 
             est_ids_renglon: List[int] = []
@@ -1406,6 +1500,25 @@ class OCRIntegrationService:
                         est_ids_renglon.append(eid_int)
 
             if not est_ids_renglon:
+                continue
+
+            # Insertar siempre el recorte visual vinculado por M2M a los 1..N estudios seleccionados
+            if imagen_str:
+                lote_key = (imagen_str, tuple(sorted(est_ids_renglon)))
+                if lote_key not in recortes_guardados_lote:
+                    recortes_guardados_lote.add(lote_key)
+                    nuevo_recorte = RecorteImagenEstudio.objects.create(
+                        firma_visual=vhash_item or '',
+                        texto_detectado=str(raw_t or '')[:255],
+                        imagen_muestra=imagen_str
+                    )
+                    RecorteEstudio.objects.bulk_create([
+                        RecorteEstudio(recorte=nuevo_recorte, estudio=estudios_activos_map[eid])
+                        for eid in est_ids_renglon
+                    ])
+                    total_recortes_guardados += 1
+
+            if len(texto_norm) < 2:
                 continue
 
             if len(est_ids_renglon) == 1:
@@ -1470,6 +1583,10 @@ class OCRIntegrationService:
 
                 total_baterias_actualizadas += 1
                 if not es_manuscrito_sin_texto:
+                    if len(cls._dividir_subsegmentos(raw_t)) <= 1:
+                        for eid in est_ids_renglon:
+                            if cls._upsert_alias_aprendido(texto_norm, estudios_activos_map[eid], imagen_str):
+                                total_alias_actualizados += 1
                     total_alias_actualizados += cls._asociar_subsegmentos_con_estudios(
                         raw_texto=raw_t,
                         estudios_ordenados=[estudios_activos_map[eid] for eid in est_ids_renglon],
@@ -1565,7 +1682,8 @@ class OCRIntegrationService:
             'mensaje': 'Retroalimentación y memoria adaptativa registradas con éxito.',
             'alias_procesados': total_alias_actualizados,
             'baterias_procesadas': total_baterias_actualizadas,
-            'descartados_procesados': total_descartados
+            'descartados_procesados': total_descartados,
+            'recortes_guardados': total_recortes_guardados
         }
 
     @classmethod

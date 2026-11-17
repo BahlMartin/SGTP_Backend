@@ -14,7 +14,9 @@ from app.models.studies import (
     SeccionEstudio,
     EstudioAliasAprendido,
     PerfilEstudioPatron,
-    CoocurrenciaEstudio
+    CoocurrenciaEstudio,
+    RecorteImagenEstudio,
+    RecorteEstudio
 )
 from app.models.patient import Paciente
 from app.models.box import (
@@ -61,6 +63,8 @@ __all__ = [
     'EstudioAliasAprendido',
     'PerfilEstudioPatron',
     'CoocurrenciaEstudio',
+    'RecorteImagenEstudio',
+    'RecorteEstudio',
     'Paciente',
     'Box',
     'Ticket',
