@@ -188,12 +188,26 @@ class EmergencyUnlockView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+class HealthPingView(APIView):
+    """
+    Endpoint ultraliviano de keep-alive (sin acceso a BD) para evitar
+    spin-down por inactividad HTTP en plataformas PaaS (Render).
+    """
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    @extend_schema(request=None, responses={200: dict})
+    def get(self, request: Request) -> Response:
+        return Response({"status": "ok"}, status=status.HTTP_200_OK)
+
+
 app_name = 'auth_endpoints'
 
 urlpatterns = [
     path('login/', LoginView.as_view(), name='login'),
     path('logout/', LogoutView.as_view(), name='logout'),
     path('session/', SessionMeView.as_view(), name='session-me'),
+    path('ping/', HealthPingView.as_view(), name='health-ping'),
     path('desbloquear/', DesbloqueoManualView.as_view(), name='desbloqueo-manual'),
     path('bloquear/', BloqueoManualView.as_view(), name='bloqueo-manual'),
     path('emergency-unlock/', EmergencyUnlockView.as_view(), name='emergency-unlock'),
@@ -203,6 +217,7 @@ __all__ = [
     'LoginView',
     'LogoutView',
     'SessionMeView',
+    'HealthPingView',
     'DesbloqueoManualView',
     'BloqueoManualView',
     'EmergencyUnlockView',
