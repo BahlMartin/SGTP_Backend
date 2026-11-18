@@ -920,6 +920,8 @@ class EmpleadoJornadaView(APIView):
 
                 'alerta': alerta_texto,
 
+                'metadata': ev.metadata or {},
+
                 'evento': {
 
                     'id': ev.id,
@@ -936,7 +938,9 @@ class EmpleadoJornadaView(APIView):
 
                     'descripcion': ev.descripcion,
 
-                    'alertas': ev.alertas or []
+                    'alertas': ev.alertas or [],
+
+                    'metadata': ev.metadata or {}
 
                 },
 

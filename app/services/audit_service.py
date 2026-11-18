@@ -265,6 +265,9 @@ class AuditService:
                 ua = audit_user_agent.get()
                 disp = audit_device_summary.get()
 
+            if usuario and not getattr(usuario, 'is_authenticated', False):
+                usuario = None
+
             if not categoria:
                 if metadata and metadata.get('sector') == 'admision':
                     categoria = CategoriaAuditoria.ADMISION
@@ -339,7 +342,7 @@ class AuditService:
                         categoria=categoria,
                         accion=accion,
                         resultado=resultado,
-                        descripcion=descripcion or accion,
+                        descripcion=(descripcion or accion)[:255],
                         entidad_tipo=entidad_tipo,
                         entidad_id=str(entidad_id) if entidad_id is not None else None,
                         metadata=metadata or {},
@@ -656,7 +659,8 @@ class AuditService:
                 'categoria': ev.categoria,
                 'accion': ev.accion,
                 'resultado': ev.resultado,
-                'alertas': ev.alertas or []
+                'alertas': ev.alertas or [],
+                'metadata': ev.metadata or {}
             })
 
         return {

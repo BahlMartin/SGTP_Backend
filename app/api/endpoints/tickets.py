@@ -28,7 +28,7 @@ from app.schemas.ticket import (
 from app.services.ticket_service import TicketService
 from app.services.audit_service import AuditService
 from app.services.reception_service import ReceptionService
-from app.models.audit import AccionAuditoria, ResultadoAuditoria
+from app.models.audit import AccionAuditoria, ResultadoAuditoria, CategoriaAuditoria
 from app.services.triage_service import construir_orden_prioridad_case
 
 from asgiref.sync import async_to_sync
@@ -154,18 +154,30 @@ class TicketViewSet(viewsets.ModelViewSet):
 
         # Notificar al WebSocket la creación del ticket (Cola, Boxes, Jefatura y Reportes)
         notificar_eventos_ticket(ticket, 'NEW_TICKET')
-        paciente_dni = getattr(ticket.paciente, 'dni', None)
+        paciente_obj = getattr(ticket, 'paciente', None)
+        paciente_dni = getattr(paciente_obj, 'dni', None)
         ReceptionService.finalizar_por_numero(numero_llamado=ticket.num_totem, dni=paciente_dni)
+
+        dni_str = str(paciente_dni or '').strip() or '—'
+        afiliado_str = str(getattr(paciente_obj, 'num_obra_social', '') or '').strip() or 'Sin N°'
 
         AuditService.registrar_evento(
             accion=AccionAuditoria.TICKET_CREADO,
+            categoria=CategoriaAuditoria.ADMISION,
             usuario=request.user,
             resultado=ResultadoAuditoria.EXITO,
-            descripcion=f'Emisión de Ticket {ticket.num_totem} ({ticket.clasificacion_triage})',
+            descripcion=(
+                f"Finalización en Admisión (Ticket emitido) — Turno {ticket.num_totem} "
+                f"({ticket.clasificacion_triage}) · DNI: {dni_str} · N° Afiliado: {afiliado_str}"
+            )[:255],
             entidad_tipo='Ticket',
             entidad_id=ticket.pk,
             metadata={
+                'sector': 'admision',
+                'turno': ticket.num_totem,
                 'ticket': ticket.num_totem,
+                'dni': dni_str,
+                'numero_afiliado': afiliado_str,
                 'triage': ticket.clasificacion_triage,
                 'paciente_id': ticket.paciente_id,
             },

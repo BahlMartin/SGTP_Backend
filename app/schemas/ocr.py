@@ -53,6 +53,11 @@ class OCRRenglonMapeadoSerializer(serializers.Serializer):
     es_ruido_aprendido = serializers.BooleanField(default=False)
     combo_detectado = serializers.CharField(allow_null=True, required=False)
     imagen_muestra_conocida = serializers.CharField(allow_blank=True, allow_null=True, required=False)
+    imagenes_muestra_conocidas = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        default=list
+    )
     recomendados = OCRResultadoEstudioSerializer(many=True)
 
 

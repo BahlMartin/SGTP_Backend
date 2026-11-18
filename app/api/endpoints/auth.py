@@ -20,6 +20,8 @@ from app.schemas.user import (
 from app.services.auth_service import AuthenticationService
 from app.services.audit_service import AuditService
 from app.models.audit import AccionAuditoria, ResultadoAuditoria
+from app.models.box import Box, AsignacionesBox, EstadoBox
+from app.models.user import RolPersonal
 
 
 class LoginView(APIView):
@@ -80,6 +82,19 @@ class LogoutView(APIView):
     def post(self, request: Request) -> Response:
         from app.services.triage_service import TriageService
         user = request.user
+        if getattr(user, 'rol', None) == RolPersonal.BOX:
+            tiene_paciente_en_atencion = (
+                Box.objects.filter(personal_actual=user, estado=EstadoBox.EN_ATENCION).exists()
+                or AsignacionesBox.objects.filter(personal=user, fecha_hora_final__isnull=True).exists()
+            )
+            if tiene_paciente_en_atencion:
+                return Response(
+                    {
+                        "error": "PACIENTE_EN_ATENCION",
+                        "detail": "No puede cerrar sesión mientras está atendiendo a un paciente en Box. Finalice o cancele la atención actual antes de salir."
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
         AuditService.registrar_evento(
             accion=AccionAuditoria.LOGOUT,
             usuario=user,

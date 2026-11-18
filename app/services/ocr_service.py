@@ -443,6 +443,7 @@ class OCRIntegrationService:
                 'es_ruido_aprendido': True,
                 'combo_detectado': None,
                 'imagen_muestra_conocida': '',
+                'imagenes_muestra_conocidas': [],
                 'recomendados': []
             }
 
@@ -451,6 +452,17 @@ class OCRIntegrationService:
         mejor_por_segmento: Dict[str, Tuple[int, float]] = {}
         combo_detectado = None
         imagen_muestra_conocida = ''
+        imagenes_muestra_conocidas: List[str] = []
+        imagenes_muestra_vistas: Set[str] = set()
+
+        def _agregar_imagen_muestra(img_str: Any) -> None:
+            if not isinstance(img_str, str):
+                return
+            limpia = img_str.strip()
+            if not limpia or limpia in imagenes_muestra_vistas:
+                return
+            imagenes_muestra_vistas.add(limpia)
+            imagenes_muestra_conocidas.append(limpia)
 
         def _registrar_candidato(
             estudio: Estudios,
@@ -506,6 +518,7 @@ class OCRIntegrationService:
             coincidencias_por_estudio: Dict[int, int] = {}
             mejor_score_por_estudio: Dict[int, float] = {}
             mejor_recorte_por_estudio: Dict[int, int] = {}
+            recortes_coincidentes: List[Tuple[int, float]] = []
 
             if recortes_visuales_idx:
                 for rec_id, firma_guardada, texto_det_norm, est_ids in recortes_visuales_idx:
@@ -528,6 +541,7 @@ class OCRIntegrationService:
                         sv = min(100.0, round(sv_base + 2.5, 2))
 
                     if sv >= 82.0:
+                        recortes_coincidentes.append((rec_id, sv))
                         for eid in est_ids_validos:
                             coincidencias_por_estudio[eid] = coincidencias_por_estudio.get(eid, 0) + 1
                             if sv > mejor_score_por_estudio.get(eid, 0.0):
@@ -547,6 +561,7 @@ class OCRIntegrationService:
                     'es_ruido_aprendido': True,
                     'combo_detectado': None,
                     'imagen_muestra_conocida': '',
+                    'imagenes_muestra_conocidas': [],
                     'recomendados': []
                 }
 
@@ -555,12 +570,25 @@ class OCRIntegrationService:
                 if cnt >= 2 and mejor_score_por_estudio.get(eid, 0.0) >= 85.0
             ]
             if mejor_recorte_id is not None and mejor_score_trazo >= 84.0 and mejor_estudios_ids:
-                img_ganadora = (
+                recortes_coincidentes_ordenados = sorted(
+                    recortes_coincidentes,
+                    key=lambda item: item[1],
+                    reverse=True
+                )
+                ids_coincidentes = list(dict.fromkeys(rec_id for rec_id, _ in recortes_coincidentes_ordenados))
+                if mejor_recorte_id not in ids_coincidentes:
+                    ids_coincidentes.insert(0, mejor_recorte_id)
+                imagenes_por_rec_id = dict(
                     RecorteImagenEstudio.objects
-                    .filter(id=mejor_recorte_id)
-                    .values_list('imagen_muestra', flat=True)
-                    .first()
-                    or ''
+                    .filter(id__in=ids_coincidentes)
+                    .values_list('id', 'imagen_muestra')
+                )
+                for rec_id in ids_coincidentes:
+                    _agregar_imagen_muestra(imagenes_por_rec_id.get(rec_id, ''))
+
+                img_ganadora = (
+                    (imagenes_por_rec_id.get(mejor_recorte_id) or '').strip()
+                    or (imagenes_muestra_conocidas[0] if imagenes_muestra_conocidas else '')
                 )
                 imagen_muestra_conocida = img_ganadora
 
@@ -597,6 +625,7 @@ class OCRIntegrationService:
                             else None
                         ),
                         'imagen_muestra_conocida': imagen_muestra_conocida,
+                        'imagenes_muestra_conocidas': imagenes_muestra_conocidas,
                         'recomendados': recomendados_trazo
                     }
 
@@ -623,7 +652,10 @@ class OCRIntegrationService:
 
         if patron_combo:
             combo_detectado = patron_combo.nombre_perfil
-            imagen_muestra_conocida = patron_combo.imagen_muestra or ''
+            if patron_combo.imagen_muestra:
+                _agregar_imagen_muestra(patron_combo.imagen_muestra)
+                if not imagen_muestra_conocida:
+                    imagen_muestra_conocida = patron_combo.imagen_muestra
             for est_id in (patron_combo.estudios_ids or []):
                 est = estudios_por_id.get(est_id)
                 if est and (texto_norm, est.id) not in pares_descartados:
@@ -682,8 +714,10 @@ class OCRIntegrationService:
 
                 if score_alias > 0.0:
                     img_alias = alias.imagen_muestra or ''
-                    if img_alias and not imagen_muestra_conocida:
-                        imagen_muestra_conocida = img_alias
+                    if img_alias:
+                        _agregar_imagen_muestra(img_alias)
+                        if not imagen_muestra_conocida:
+                            imagen_muestra_conocida = img_alias
                     _registrar_candidato(
                         estudio=estudio,
                         score=score_alias,
@@ -705,8 +739,10 @@ class OCRIntegrationService:
                 score_visual = cls.calcular_similitud_visual(firma_norm, vhash_alias)
                 if score_visual >= 82.0:
                     img_alias = alias.imagen_muestra or ''
-                    if img_alias and not imagen_muestra_conocida:
-                        imagen_muestra_conocida = img_alias
+                    if img_alias:
+                        _agregar_imagen_muestra(img_alias)
+                        if not imagen_muestra_conocida:
+                            imagen_muestra_conocida = img_alias
                     _registrar_candidato(
                         estudio=estudio,
                         score=round(score_visual, 2),
@@ -773,7 +809,10 @@ class OCRIntegrationService:
             'texto_normalizado': texto_norm,
             'es_ruido_aprendido': False,
             'combo_detectado': combo_detectado,
-            'imagen_muestra_conocida': imagen_muestra_conocida,
+            'imagen_muestra_conocida': imagen_muestra_conocida or (
+                imagenes_muestra_conocidas[0] if imagenes_muestra_conocidas else ''
+            ),
+            'imagenes_muestra_conocidas': imagenes_muestra_conocidas,
             'recomendados': recomendados
         }
 
@@ -1013,6 +1052,48 @@ class OCRIntegrationService:
         return m.group(1).lower(), m.group(2).replace('\n', '').replace('\r', '').strip()
 
     @classmethod
+    def _parsear_respuesta_vision_ia(
+        cls,
+        raw_content: str,
+        bloques_validos: List[Tuple[int, str, str, str]]
+    ) -> Dict[int, str] | None:
+        """Parsea la respuesta JSON de Visión IA y retorna None si viene vacía."""
+        limpio_json = str(raw_content or '').strip()
+        if limpio_json.startswith('```'):
+            limpio_json = re.sub(r'^```(?:json)?\s*|\s*```$', '', limpio_json, flags=re.IGNORECASE).strip()
+        if not limpio_json:
+            return None
+
+        parsed = json.loads(limpio_json)
+        items = parsed.get('resultados', []) if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
+        indices_esperados = {b[0] for b in bloques_validos}
+        salida: Dict[int, str] = {}
+        for entry in items:
+            if not isinstance(entry, dict):
+                continue
+            idx_val = entry.get('indice')
+            txt_val = str(entry.get('texto') or '').strip()
+            cat_list = entry.get('estudios_catalogo')
+            partes_combinadas: List[str] = []
+            vistos_norm: Set[str] = set()
+            if len(txt_val) >= 2:
+                t_norm = normalizar_texto_clinico(txt_val)
+                partes_combinadas.append(txt_val)
+                if t_norm:
+                    vistos_norm.add(t_norm)
+            if isinstance(cat_list, list):
+                for cat_item in cat_list:
+                    cat_txt = str(cat_item or '').strip()
+                    cat_norm = normalizar_texto_clinico(cat_txt)
+                    if len(cat_txt) >= 2 and cat_norm not in vistos_norm:
+                        vistos_norm.add(cat_norm)
+                        partes_combinadas.append(cat_txt)
+            combined_txt = ' ; '.join(partes_combinadas)
+            if str(idx_val).isdigit() and int(idx_val) in indices_esperados and len(combined_txt) >= 2:
+                salida[int(idx_val)] = combined_txt
+        return salida
+
+    @classmethod
     def _transcribir_recortes_con_vision_ia(
         cls,
         recortes_dudosos: List[Tuple[int, str, str]],
@@ -1021,6 +1102,7 @@ class OCRIntegrationService:
         """
         Asistente híbrido gratuito opcional (Gemini Flash / Groq / Ollama) que interpreta recortes
         manuscritos cursivos cuando la memoria local y PaddleOCR no alcanzan certeza suficiente.
+        Para Gemini aplica cascada automática de modelos fallback ante 503/429/404/Timeout.
         Nunca lanza excepciones: ante falta de API key, timeout o error retorna {}.
         """
         if not recortes_dudosos:
@@ -1028,7 +1110,7 @@ class OCRIntegrationService:
 
         provider = str(getattr(settings, 'OCR_VISION_PROVIDER', 'gemini') or 'gemini').strip().lower()
         api_key = str(getattr(settings, 'OCR_VISION_API_KEY', '') or '').strip()
-        model = str(getattr(settings, 'OCR_VISION_MODEL', 'gemini-2.5-flash') or 'gemini-2.5-flash').strip()
+        model_setting = str(getattr(settings, 'OCR_VISION_MODEL', 'gemini-3.8-flash') or 'gemini-3.8-flash').strip()
         ollama_url = str(getattr(settings, 'OCR_VISION_OLLAMA_URL', 'http://localhost:11434') or 'http://localhost:11434').strip()
         timeout = float(getattr(settings, 'OCR_VISION_TIMEOUT_SECONDS', 4.0) or 4.0)
 
@@ -1054,35 +1136,90 @@ class OCRIntegrationService:
             '{"resultados": [{"indice": <int>, "texto": "<texto transcrito o vacio>", "estudios_catalogo": ["<nombre exacto del catalogo>"]}]}'
         )
 
+        if provider == 'gemini':
+            fallback_models = [
+                'gemini-3.8-flash',
+                'gemini-3.6-flash',
+                'gemini-3.5-flash',
+                'gemini-3.5-flash-lite',
+                'gemini-flash-lite-latest',
+                'gemini-3.1-flash-lite',
+            ]
+            modelos_candidatos = list(dict.fromkeys(
+                [m.strip() for m in model_setting.split(',') if m.strip()] + fallback_models
+            ))
+
+            parts: List[Dict[str, Any]] = [{'text': prompt}]
+            for idx, raw_t, mime_t, b64 in bloques_validos:
+                parts.append({'text': f"Bloque indice {idx} (OCR previo: '{raw_t}'):"})
+                parts.append({'inline_data': {'mime_type': mime_t, 'data': b64}})
+
+            payload_gemini = {
+                'contents': [{'parts': parts}],
+                'generationConfig': {
+                    'temperature': 0.1,
+                    'responseMimeType': 'application/json'
+                }
+            }
+
+            for modelo_candidato in modelos_candidatos:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo_candidato}:generateContent?key={api_key}"
+                try:
+                    resp = requests.post(url, json=payload_gemini, timeout=timeout)
+                    if resp.status_code in (503, 429, 404):
+                        logger.warning(
+                            "Asistente Gemini modelo '%s' respondió HTTP %s; intentando siguiente modelo fallback.",
+                            modelo_candidato,
+                            resp.status_code
+                        )
+                        continue
+                    resp.raise_for_status()
+                    body = resp.json()
+                    candidates = body.get('candidates') or []
+                    raw_content = ''
+                    if candidates:
+                        c_parts = (candidates[0].get('content') or {}).get('parts') or []
+                        if c_parts:
+                            raw_content = str(c_parts[0].get('text') or '')
+                    salida = cls._parsear_respuesta_vision_ia(raw_content, bloques_validos)
+                    if salida is not None:
+                        return salida
+                    logger.warning(
+                        "Asistente Gemini modelo '%s' devolvió respuesta vacía; intentando siguiente modelo fallback.",
+                        modelo_candidato
+                    )
+                except requests.exceptions.Timeout as exc:
+                    logger.warning(
+                        "Timeout consultando Gemini modelo '%s': %s; intentando siguiente modelo fallback.",
+                        modelo_candidato,
+                        exc
+                    )
+                    continue
+                except requests.exceptions.RequestException as exc:
+                    status_code = getattr(getattr(exc, 'response', None), 'status_code', None)
+                    if status_code in (401, 403):
+                        logger.warning("Gemini rechazó credenciales (HTTP %s) en modelo '%s': %s", status_code, modelo_candidato, exc)
+                        return {}
+                    logger.warning(
+                        "Error de red/HTTP (%s) en Gemini modelo '%s': %s; intentando siguiente modelo fallback.",
+                        status_code or 'RequestException',
+                        modelo_candidato,
+                        exc
+                    )
+                    continue
+                except (ValueError, KeyError, TypeError) as exc:
+                    logger.warning(
+                        "Respuesta JSON inválida en Gemini modelo '%s': %s; intentando siguiente modelo fallback.",
+                        modelo_candidato,
+                        exc
+                    )
+                    continue
+            return {}
+
+        model = ([m.strip() for m in model_setting.split(',') if m.strip()] or [model_setting])[0]
         raw_content = ''
         try:
-            if provider == 'gemini':
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-                parts: List[Dict[str, Any]] = [{'text': prompt}]
-                for idx, raw_t, mime_t, b64 in bloques_validos:
-                    parts.append({'text': f"Bloque indice {idx} (OCR previo: '{raw_t}'):"})
-                    parts.append({'inline_data': {'mime_type': mime_t, 'data': b64}})
-
-                resp = requests.post(
-                    url,
-                    json={
-                        'contents': [{'parts': parts}],
-                        'generationConfig': {
-                            'temperature': 0.1,
-                            'responseMimeType': 'application/json'
-                        }
-                    },
-                    timeout=timeout
-                )
-                resp.raise_for_status()
-                body = resp.json()
-                candidates = body.get('candidates') or []
-                if candidates:
-                    c_parts = (candidates[0].get('content') or {}).get('parts') or []
-                    if c_parts:
-                        raw_content = str(c_parts[0].get('text') or '')
-
-            elif provider == 'groq':
+            if provider == 'groq':
                 user_content: List[Dict[str, Any]] = [{'type': 'text', 'text': prompt}]
                 for idx, raw_t, mime_t, b64 in bloques_validos:
                     user_content.append({'type': 'text', 'text': f"Bloque indice {idx} (OCR previo: '{raw_t}'):"})
@@ -1129,40 +1266,8 @@ class OCRIntegrationService:
             else:
                 return {}
 
-            limpio_json = raw_content.strip()
-            if limpio_json.startswith('```'):
-                limpio_json = re.sub(r'^```(?:json)?\s*|\s*```$', '', limpio_json, flags=re.IGNORECASE).strip()
-            if not limpio_json:
-                return {}
-
-            parsed = json.loads(limpio_json)
-            items = parsed.get('resultados', []) if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
-            indices_esperados = {b[0] for b in bloques_validos}
-            salida: Dict[int, str] = {}
-            for entry in items:
-                if not isinstance(entry, dict):
-                    continue
-                idx_val = entry.get('indice')
-                txt_val = str(entry.get('texto') or '').strip()
-                cat_list = entry.get('estudios_catalogo')
-                partes_combinadas: List[str] = []
-                vistos_norm: Set[str] = set()
-                if len(txt_val) >= 2:
-                    t_norm = normalizar_texto_clinico(txt_val)
-                    partes_combinadas.append(txt_val)
-                    if t_norm:
-                        vistos_norm.add(t_norm)
-                if isinstance(cat_list, list):
-                    for cat_item in cat_list:
-                        cat_txt = str(cat_item or '').strip()
-                        cat_norm = normalizar_texto_clinico(cat_txt)
-                        if len(cat_txt) >= 2 and cat_norm not in vistos_norm:
-                            vistos_norm.add(cat_norm)
-                            partes_combinadas.append(cat_txt)
-                combined_txt = ' ; '.join(partes_combinadas)
-                if str(idx_val).isdigit() and int(idx_val) in indices_esperados and len(combined_txt) >= 2:
-                    salida[int(idx_val)] = combined_txt
-            return salida
+            salida = cls._parsear_respuesta_vision_ia(raw_content, bloques_validos)
+            return salida if salida is not None else {}
         except Exception as exc:
             logger.warning("Asistente de Visión IA (%s) no pudo transcribir bloques dudosos: %s", provider, exc)
             return {}
@@ -1468,8 +1573,22 @@ class OCRIntegrationService:
                         key=lambda c: (1 if c.get('preseleccionado') else 0, c.get('similitud_score', 0.0)),
                         reverse=True
                     )
+                    merged_imgs = list(dict.fromkeys([
+                        img for img in (
+                            (prev_renglon.get('imagenes_muestra_conocidas') or [])
+                            + (renglon_ia.get('imagenes_muestra_conocidas') or [])
+                            + ([prev_renglon.get('imagen_muestra_conocida')] if prev_renglon.get('imagen_muestra_conocida') else [])
+                            + ([renglon_ia.get('imagen_muestra_conocida')] if renglon_ia.get('imagen_muestra_conocida') else [])
+                        ) if isinstance(img, str) and img.strip()
+                    ]))
                     renglones[idx_ia] = {
                         **renglon_ia,
+                        'imagen_muestra_conocida': (
+                            renglon_ia.get('imagen_muestra_conocida')
+                            or prev_renglon.get('imagen_muestra_conocida')
+                            or (merged_imgs[0] if merged_imgs else '')
+                        ),
+                        'imagenes_muestra_conocidas': merged_imgs,
                         'recomendados': merged_recs
                     }
 

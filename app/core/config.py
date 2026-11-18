@@ -39,6 +39,11 @@ class Settings:
     OCR_SERVICE_URL: str = env('OCR_SERVICE_URL')
     OCR_SERVICE_TIMEOUT_SECONDS: int = env.int('OCR_SERVICE_TIMEOUT_SECONDS', default=15)
     OCR_SIMILARITY_THRESHOLD: int = env.int('OCR_SIMILARITY_THRESHOLD', default=80)
+    OCR_VISION_API_KEY: str = env('OCR_VISION_API_KEY', default=env('GEMINI_API_KEY', default=''))
+    OCR_VISION_PROVIDER: str = env('OCR_VISION_PROVIDER', default='gemini')
+    OCR_VISION_MODEL: str = env('OCR_VISION_MODEL', default='gemini-3.8-flash')
+    OCR_VISION_OLLAMA_URL: str = env('OCR_VISION_OLLAMA_URL', default='http://localhost:11434')
+    OCR_VISION_TIMEOUT_SECONDS: float = env.float('OCR_VISION_TIMEOUT_SECONDS', default=20.0)
 
     # Base de Datos
     DATABASE_URL: str = env('DATABASE_URL')

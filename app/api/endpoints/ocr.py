@@ -201,11 +201,12 @@ class InterpretarRecortesIAView(APIView):
             accion=AccionAuditoria.RECETA_ESCANEADA,
             usuario=request.user,
             resultado=ResultadoAuditoria.EXITO,
-            descripcion='Consulta IA bajo demanda sobre recortes seleccionados',
+            descripcion='Escaneo con IA Gemini sobre recortes seleccionados',
             metadata={
                 'recortes_enviados': len(recortes),
                 'recortes_resueltos': sum(1 for r in resultados if r.get('recomendados')),
-                'modo': 'recortes_bajo_demanda_ia'
+                'modo': 'recortes_bajo_demanda_ia',
+                'motor_ia': 'gemini'
             },
             request=request
         )

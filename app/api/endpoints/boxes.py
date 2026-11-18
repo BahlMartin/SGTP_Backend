@@ -31,9 +31,20 @@ from app.schemas.ticket import TicketDetailSerializer, TicketHistorialDetailSeri
 from app.models.ticket import Ticket
 from app.services.triage_service import TriageService
 from app.services.audit_service import AuditService
-from app.models.audit import AccionAuditoria, ResultadoAuditoria
+from app.models.audit import AccionAuditoria, ResultadoAuditoria, CategoriaAuditoria
 from app.core.permissions import IsBoxOrJefa
 from app.services.ticket_service import TicketService
+
+
+def _extraer_traza_paciente(ticket: Ticket | None) -> tuple[str, str, str]:
+    """Extrae (turno_str, dni_str, afiliado_str) de un Ticket para auditoría."""
+    if not ticket:
+        return '—', '—', 'Sin N°'
+    turno_str = str(getattr(ticket, 'num_totem', '') or '').strip() or '—'
+    paciente = getattr(ticket, 'paciente', None)
+    dni_str = str(getattr(paciente, 'dni', '') or '').strip() or '—'
+    afiliado_str = str(getattr(paciente, 'num_obra_social', '') or '').strip() or 'Sin N°'
+    return turno_str, dni_str, afiliado_str
 
 
 def notificar_actualizacion_reportes():
@@ -222,6 +233,30 @@ class BoxViewSet(viewsets.ModelViewSet):
         notificar_monitor_operativo_box(box)
         notificar_actualizacion_reportes()
 
+        turno_str, dni_str, afiliado_str = _extraer_traza_paciente(ticket)
+        AuditService.registrar_evento(
+            accion=AccionAuditoria.PACIENTE_LLAMADO,
+            categoria=CategoriaAuditoria.BOX,
+            usuario=request.user,
+            resultado=ResultadoAuditoria.EXITO,
+            descripcion=(
+                f"Llamado en Box {box.numero} — Turno {turno_str} "
+                f"· DNI: {dni_str} · N° Afiliado: {afiliado_str}"
+            )[:255],
+            entidad_tipo='Ticket',
+            entidad_id=ticket.pk,
+            metadata={
+                'sector': 'box',
+                'box': f'Box {box.numero}',
+                'turno': turno_str,
+                'ticket': turno_str,
+                'dni': dni_str,
+                'numero_afiliado': afiliado_str,
+                'triage': ticket.clasificacion_triage,
+            },
+            request=request
+        )
+
         return Response(
             {
                 "mensaje": f"Paciente llamado con éxito al Box {box.numero}.",
@@ -311,21 +346,37 @@ class BoxViewSet(viewsets.ModelViewSet):
         if motivo_cierre != MotivoCierreBox.CANCELADO:
             notificar_actualizacion_estudios_laboratorio(ticket=getattr(asignacion, 'ticket', None))
 
+        ticket_instancia = None
+        if asignacion and asignacion.ticket_id:
+            ticket_instancia = Ticket.objects.select_related(
+                'paciente', 'personal_admision', 'box_actual'
+            ).prefetch_related(
+                'estudios__estudio',
+                'asignaciones_historial__personal',
+                'asignaciones_historial__box'
+            ).filter(pk=asignacion.ticket_id).first()
+
         es_cancelado = (motivo_cierre == MotivoCierreBox.CANCELADO)
+        turno_str, dni_str, afiliado_str = _extraer_traza_paciente(ticket_instancia)
         AuditService.registrar_evento(
             accion=AccionAuditoria.ATENCION_CANCELADA if es_cancelado else AccionAuditoria.ATENCION_FINALIZADA,
+            categoria=CategoriaAuditoria.BOX,
             usuario=request.user,
             resultado=ResultadoAuditoria.EXITO,
             descripcion=(
-                f"Atención en Box {box.numero} cancelada. Motivo: {observaciones_cierre or 'Cancelación en box'}"
+                f"Atención en Box {box.numero} cancelada — Turno {turno_str} · DNI: {dni_str} · N° Afiliado: {afiliado_str}. Motivo: {observaciones_cierre or 'Cancelación en box'}"
                 if es_cancelado
-                else f"Atención finalizada satisfactoriamente en Box {box.numero}"
-            ),
+                else f"Atención finalizada en Box {box.numero} — Turno {turno_str} · DNI: {dni_str} · N° Afiliado: {afiliado_str}"
+            )[:255],
             entidad_tipo='Box',
             entidad_id=box.id,
             metadata={
+                'sector': 'box',
                 'box': f'Box {box.numero}',
-                'ticket': getattr(asignacion.ticket, 'num_totem', '') if asignacion and asignacion.ticket else '',
+                'turno': turno_str,
+                'ticket': turno_str,
+                'dni': dni_str,
+                'numero_afiliado': afiliado_str,
                 'motivo_cierre': motivo_cierre,
                 'observaciones': observaciones_cierre
             },
@@ -338,17 +389,7 @@ class BoxViewSet(viewsets.ModelViewSet):
             else f"Atención del Box {box.numero} finalizada."
         )
 
-        ticket_data = None
-        if asignacion and asignacion.ticket:
-            ticket_instancia = Ticket.objects.select_related(
-                'paciente', 'personal_admision', 'box_actual'
-            ).prefetch_related(
-                'estudios__estudio',
-                'asignaciones_historial__personal',
-                'asignaciones_historial__box'
-            ).filter(pk=asignacion.ticket.pk).first()
-            if ticket_instancia:
-                ticket_data = TicketHistorialDetailSerializer(ticket_instancia).data
+        ticket_data = TicketHistorialDetailSerializer(ticket_instancia).data if ticket_instancia else None
 
         return Response(
             {

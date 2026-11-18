@@ -78,13 +78,25 @@ class TurnoRecepcionViewSet(viewsets.ReadOnlyModelViewSet):
         turnos = ReceptionService.obtener_turnos_pendientes_hoy()
         return Response(TurnoRecepcionSerializer(turnos, many=True).data)
 
+    @action(detail=False, methods=['get'], url_path='en-atencion', permission_classes=[AllowAny])
+    def turnos_en_atencion(self, request):
+        """
+        Retorna los turnos de recepción actualmente 'En Atención' para el día de hoy.
+        """
+        turnos = ReceptionService.obtener_turnos_en_atencion_hoy()
+        return Response(TurnoRecepcionSerializer(turnos, many=True).data)
+
     @action(detail=True, methods=['post'], url_path='llamar', permission_classes=[AllowAny])
     def llamar_paciente(self, request, pk=None):
         """
         Pasa el turno a 'En Atención' cuando la recepcionista lo convoca desde la cola.
         """
         try:
-            turno = ReceptionService.llamar_turno(pk)
+            turno = ReceptionService.llamar_turno(
+                pk,
+                usuario=request.user,
+                request=request
+            )
             return Response(TurnoRecepcionSerializer(turno).data)
         except TurnoRecepcion.DoesNotExist:
             return Response({'error': 'Turno no encontrado.'}, status=status.HTTP_404_NOT_FOUND)

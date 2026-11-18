@@ -10,7 +10,7 @@ import logging
 
 import re
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 from asgiref.sync import async_to_sync
 
@@ -25,6 +25,8 @@ from django.core.exceptions import ValidationError
 
 
 from app.models.reception import TurnoRecepcion, EstadoTurnoRecepcion, CategoriaTurnoRecepcion
+
+from app.models.patient import Paciente
 
 
 
@@ -105,6 +107,36 @@ def notificar_websocket_recepcion(evento: str, action: str, data: Dict[str, Any]
 
 
 class ReceptionService:
+
+    @staticmethod
+
+    def _obtener_datos_paciente_por_dni(dni_raw: Any) -> Tuple[str, str]:
+
+        """Obtiene DNI y número de afiliado (FLE) del paciente empadronado, con fallback seguro."""
+
+        dni_str = str(dni_raw or '').strip()
+
+        afiliado_str = 'No empadronado'
+
+        if dni_str:
+
+            try:
+
+                paciente = Paciente.objects.filter(dni=int(dni_str), is_deleted=False).first()
+
+                if paciente:
+
+                    num_os = str(getattr(paciente, 'num_obra_social', '') or '').strip()
+
+                    afiliado_str = num_os if num_os else 'Sin N°'
+
+            except (ValueError, TypeError):
+
+                pass
+
+        return dni_str or '—', afiliado_str
+
+
 
     @staticmethod
 
@@ -278,9 +310,49 @@ class ReceptionService:
 
     @staticmethod
 
+    def obtener_turnos_en_atencion_hoy() -> List[TurnoRecepcion]:
+
+        """
+
+        Retorna los turnos del día que se encuentran en estado 'En Atencion',
+
+        ordenados del más recientemente actualizado al más antiguo.
+
+        """
+
+        hoy = timezone.localdate()
+
+        inicio_hoy = timezone.make_aware(
+
+            timezone.datetime.combine(hoy, timezone.datetime.min.time()),
+
+            timezone.get_current_timezone()
+
+        )
+
+        return TurnoRecepcion.objects.filter(
+
+            created_at__gte=inicio_hoy,
+
+            estado=EstadoTurnoRecepcion.EN_ATENCION
+
+        ).order_by('-updated_at')
+
+
+
+    @staticmethod
+
     @transaction.atomic
 
-    def llamar_turno(turno_id: str) -> TurnoRecepcion:
+    def llamar_turno(
+
+        turno_id: str,
+
+        usuario: Optional[Any] = None,
+
+        request: Optional[Any] = None
+
+    ) -> TurnoRecepcion:
 
         """Marca un turno como 'En Atención' cuando la recepcionista lo convoca."""
 
@@ -317,6 +389,60 @@ class ReceptionService:
             }
 
         )
+
+
+
+        try:
+
+            dni_str, afiliado_str = ReceptionService._obtener_datos_paciente_por_dni(turno.dni)
+
+            usuario_audit = usuario if (usuario and getattr(usuario, 'is_authenticated', False)) else None
+
+            AuditService.registrar_evento(
+
+                accion=AccionAuditoria.PACIENTE_LLAMADO,
+
+                categoria=CategoriaAuditoria.ADMISION,
+
+                usuario=usuario_audit,
+
+                resultado=ResultadoAuditoria.EXITO,
+
+                request=request,
+
+                descripcion=(
+
+                    f"Llamado en Admisión — Turno {turno.numero_llamado} "
+
+                    f"· DNI: {dni_str} · N° Afiliado: {afiliado_str}"
+
+                )[:255],
+
+                entidad_tipo='TurnoRecepcion',
+
+                entidad_id=str(turno.id),
+
+                metadata={
+
+                    'sector': 'admision',
+
+                    'turno': turno.numero_llamado,
+
+                    'ticket': turno.numero_llamado,
+
+                    'dni': dni_str,
+
+                    'numero_afiliado': afiliado_str,
+
+                }
+
+            )
+
+        except Exception as audit_err:
+
+            logger.warning(f"Error registrando auditoría en llamar_turno: {audit_err}")
+
+
 
         return turno
 
@@ -382,9 +508,13 @@ class ReceptionService:
 
         try:
 
+            dni_str, afiliado_str = ReceptionService._obtener_datos_paciente_por_dni(turno.dni)
+
+            usuario_audit = usuario if (usuario and getattr(usuario, 'is_authenticated', False)) else None
+
             AuditService.registrar_evento(
 
-                usuario=usuario,
+                usuario=usuario_audit,
 
                 request=request,
 
@@ -394,13 +524,33 @@ class ReceptionService:
 
                 resultado=ResultadoAuditoria.EXITO,
 
-                descripcion=f"Turno de recepción #{turno.numero_llamado} cancelado: {turno.motivo_cancelacion}",
+                descripcion=(
+
+                    f"Cancelación en Admisión — Turno {turno.numero_llamado} "
+
+                    f"· DNI: {dni_str} · N° Afiliado: {afiliado_str} ({turno.motivo_cancelacion})"
+
+                )[:255],
 
                 entidad_tipo='TurnoRecepcion',
 
                 entidad_id=str(turno.id),
 
-                metadata={'motivo': turno.motivo_cancelacion, 'sector': 'admision'}
+                metadata={
+
+                    'motivo': turno.motivo_cancelacion,
+
+                    'sector': 'admision',
+
+                    'turno': turno.numero_llamado,
+
+                    'ticket': turno.numero_llamado,
+
+                    'dni': dni_str,
+
+                    'numero_afiliado': afiliado_str,
+
+                }
 
             )
 
