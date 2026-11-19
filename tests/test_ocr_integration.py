@@ -1660,6 +1660,95 @@ class OCRIntegrationTestCase(TestCase):
         self.assertEqual(len(renglones[1]['trazos_coincidentes']), 1)
         self.assertEqual(renglones[1]['trazos_coincidentes'][0]['recorte_id'], rec_combo.id)
 
+    def test_receta_manuscrita_9_estudios_dos_columnas_completa(self):
+        """Valida detección completa de los 9 estudios de la receta manuscrita a 2 columnas sin falsos positivos."""
+        Estudios.objects.all().update(activo=False)
+
+        nombres_objetivo = [
+            'HEMOGRAMA CON FORMULA',
+            'HEPATOGRAMA',
+            'Glucemia',
+            'Urea',
+            'Creatinina en suero',
+            'Lipidograma',
+            'Orina Completa',
+            'Hemoglobina glicosilada',
+            'RAC (relación albu/cre) ó CAC (cociente alb/cre) (orina asilada)',
+        ]
+        estudios_objetivo = {}
+        for idx, nombre in enumerate(nombres_objetivo, start=1):
+            est = Estudios.objects.create(
+                codigo_practica=f'REC9-{idx:02d}',
+                nombre=nombre,
+                tipo_muestra=(
+                    TipoMuestra.ORINA
+                    if 'orina' in nombre.lower() or 'rac' in nombre.lower()
+                    else TipoMuestra.SANGRE
+                ),
+                activo=True,
+            )
+            estudios_objetivo[nombre] = est
+
+        est_prot_tot = Estudios.objects.create(
+            codigo_practica='DIST-01',
+            nombre='Proteínas totales',
+            tipo_muestra=TipoMuestra.SANGRE,
+            activo=True,
+        )
+        est_creat_orina = Estudios.objects.create(
+            codigo_practica='DIST-02',
+            nombre='Creatinina en orina aislada',
+            tipo_muestra=TipoMuestra.ORINA,
+            activo=True,
+        )
+        est_calcio_orina = Estudios.objects.create(
+            codigo_practica='DIST-03',
+            nombre='Calcio Orina Aislada',
+            tipo_muestra=TipoMuestra.ORINA,
+            activo=True,
+        )
+
+        variantes_lectura = [
+            [
+                'Ycllte', 'covtemel', 'tpots Rom', 'HDL', 'Humi',
+                'HA1C', 'VAT', 'Wotmm', 'Otintopi', 'Wuite Aisiat', '9my',
+            ],
+            [
+                '4CLL6r6', 'Covtemel', 'itpote Som', 'H D P', 'Wcmw',
+                'HA1C', 'VAT', 'Wotmim', 'Crin Goepi', 'Cuite Aislaet', '9my',
+            ],
+        ]
+
+        ids_esperados = {est.id for est in estudios_objetivo.values()}
+        ids_distractores_prohibidos = {est_prot_tot.id, est_creat_orina.id, est_calcio_orina.id}
+
+        for lectura in variantes_lectura:
+            resultado = OCRIntegrationService.mapear_textos_con_estudios(
+                lectura,
+                permitir_vision_ia=False,
+            )
+            ids_sugeridos = {s['id_estudio'] for s in resultado['sugerencias']}
+            for nombre_est, est_obj in estudios_objetivo.items():
+                self.assertIn(
+                    est_obj.id,
+                    ids_sugeridos,
+                    f"Faltó detectar '{nombre_est}' en lectura {lectura}",
+                )
+            self.assertTrue(ids_esperados.issubset(ids_sugeridos))
+            self.assertNotIn(est_prot_tot.id, ids_sugeridos)
+            self.assertNotIn(est_creat_orina.id, ids_sugeridos)
+
+            ids_preseleccionados = {
+                rec['id_estudio']
+                for renglon in resultado['renglones']
+                for rec in renglon.get('recomendados', [])
+                if rec.get('preseleccionado')
+            }
+            self.assertTrue(ids_esperados.issubset(ids_preseleccionados))
+            for dist_id in ids_distractores_prohibidos:
+                self.assertNotIn(dist_id, ids_preseleccionados)
+
+
 
 
 

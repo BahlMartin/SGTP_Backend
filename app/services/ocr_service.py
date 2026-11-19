@@ -47,6 +47,8 @@ ALIAS_CLINICOS_MAP: Dict[str, str] = {
     'formula leucocitaria': 'hemograma',
     'recuento globular': 'hemograma',
     'citologico': 'hemograma',
+    'ycllte': 'hemograma',
+    '4cll6r6': 'hemograma',
 
     # Glucemia
     'gluc': 'glucemia',
@@ -54,6 +56,9 @@ ALIAS_CLINICOS_MAP: Dict[str, str] = {
     'glicemia': 'glucemia',
     'glucosa': 'glucemia',
     'azucar': 'glucemia',
+    'humi': 'glucemia',
+    'hum n': 'glucemia',
+    'wcmw': 'glucemia',
 
     # Orina
     'orina comp': 'orina',
@@ -62,23 +67,39 @@ ALIAS_CLINICOS_MAP: Dict[str, str] = {
     'sedimento urinario': 'orina',
     'ego': 'orina',
     'orina': 'orina',
+    'otintopi': 'orina',
+    'crin goepi': 'orina',
+    'ono ccan': 'orina',
+    '9my': 'orina',
     'alb': 'albuminuria',
     'rac': 'albuminuria',
     'cociente': 'albuminuria',
+    'wuite aisiat': 'albuminuria',
+    'cuite aislaet': 'albuminuria',
 
     # Función renal
     'urea': 'uremia',
     'bun': 'uremia',
+    'vat': 'urea',
+    'ureo': 'urea',
+    'vrea': 'urea',
+    'vreo': 'urea',
     'crea': 'creatinina',
     'creat': 'creatinina',
     'cuotinina': 'creatinina',
     'cuotinim': 'creatinina',
     'crotinina': 'creatinina',
+    'wotmm': 'creatinina',
+    'wotmim': 'creatinina',
+    'wuotmm': 'creatinina',
+    'wuot mm': 'creatinina',
     'clearence': 'creatinina',
 
     # Glucemia y Diabetes
     'hba1c': 'hemoglobina glicosilada',
     'hb a1c': 'hemoglobina glicosilada',
+    'ha1c': 'hemoglobina glicosilada',
+    'c ha1c': 'hemoglobina glicosilada',
     'glicosilada': 'hemoglobina glicosilada',
 
     # Perfil hepático
@@ -87,6 +108,12 @@ ALIAS_CLINICOS_MAP: Dict[str, str] = {
     'hypatograma': 'hepatograma',
     'pote ro': 'hepatograma',
     'potero': 'hepatograma',
+    'tpots rom': 'hepatograma',
+    'itpote som': 'hepatograma',
+    'ipote fou': 'hepatograma',
+    'tpots': 'hepatograma',
+    'itpote': 'hepatograma',
+    'ipote': 'hepatograma',
     'tgo': 'hepatograma',
     'tgp': 'hepatograma',
     'got': 'hepatograma',
@@ -96,10 +123,14 @@ ALIAS_CLINICOS_MAP: Dict[str, str] = {
 
     # Perfil lipídico
     'lipidograma': 'perfil lipidico',
+    'h d p': 'lipidograma',
+    'hdl ldl tg': 'lipidograma',
+    'hdl ldl': 'lipidograma',
     'colesterol': 'colesterol',
     'colest': 'colesterol',
     'costerel': 'colesterol',
     'costemel': 'colesterol',
+    'covtemel': 'colesterol',
     'colestrol': 'colesterol',
     'trigliceridos': 'trigliceridos',
     'tg': 'trigliceridos',
@@ -134,7 +165,8 @@ ALIAS_CLINICOS_MAP: Dict[str, str] = {
 STOPWORDS_MEDICAS = {
     'completo', 'completa', 'examen', 'estudio', 'analisis', 'rutina',
     'muestra', 'sangre', 'suero', 'plasma', 'para', 'con', 'sin', 'mas',
-    'del', 'los', 'las', 'por', 'favor', 'solicito', 'indicacion'
+    'del', 'los', 'las', 'por', 'favor', 'solicito', 'indicacion',
+    'aislada', 'asilada', 'aislado', 'unica', 'unico'
 }
 
 
@@ -148,6 +180,100 @@ def normalizar_texto_clinico(texto: str) -> str:
     )
     texto_limpio = re.sub(r'[^a-zA-Z0-9\s/]', ' ', texto_sin_acentos)
     return ' '.join(texto_limpio.lower().split())
+
+
+_OCR_PLUS_TOKEN_RE = re.compile(r'(?:^|(?<=\s))\+([a-zA-Z0-9])')
+_DURACION_DOSIS_RE = re.compile(r'^\d+(?:hs?|h|dias?|min|mg|ml|ui|g)$', re.IGNORECASE)
+_RATIO_CLINICO_KEYWORDS = {'cociente', 'relacion', 'indice', 'rac', 'cac'}
+_CALIFICADORES_DIFERENCIALES = {
+    'calcio', '24hs', '2hs', '24', 'acido', 'urico', 'fosforo',
+    'potasio', 'sodio', 'cloro', 'magnesio', 'libre', 'curva',
+    'totales', 'aislada', 'asilada', 'unica', 'orina',
+}
+_MARCADORES_PERFIL_LIPIDICO = {
+    'hdl', 'ldl', 'lipidograma', 'perfil lipidico',
+    'h d p', 'covtemel', 'costemel', 'costerel',
+}
+
+
+def _normalizar_plus_ocr(texto: str) -> str:
+    """Convierte '+' pegado al inicio de un vocablo OCR ('+g' -> 'tg') preservando separadores 'A + B'."""
+    return _OCR_PLUS_TOKEN_RE.sub(r't\1', str(texto or ''))
+
+
+def _variantes_ocr_token(tok: str) -> List[str]:
+    """
+    Genera variantes por confusiones ópticas OCR universales (8<->b, 0<->o, 6<->g,
+    5<->s, 1<->l/i, v<->u inicial, i->l cursiva, ii->ie/n, o->a final).
+    """
+    t = str(tok or '').strip().lower()
+    if len(t) < 2:
+        return []
+
+    variantes: List[str] = []
+    vistas: Set[str] = {t}
+
+    def _add(cand: str) -> None:
+        if cand and len(cand) >= 2 and cand not in vistas:
+            vistas.add(cand)
+            variantes.append(cand)
+
+    tiene_letras = any('a' <= c <= 'z' for c in t)
+    es_dosis_tiempo = bool(_DURACION_DOSIS_RE.match(t))
+    if es_dosis_tiempo:
+        return []
+
+    if tiene_letras:
+        if any(d in t for d in ('8', '0', '6', '5', '1')):
+            t_d1 = t.replace('8', 'b').replace('0', 'o').replace('6', 'g').replace('5', 's')
+            _add(t_d1)
+            _add(re.sub(r'(?<=[a-z])1|1(?=[a-z])', 'l', t_d1))
+            _add(re.sub(r'(?<=[a-z])1|1(?=[a-z])', 'i', t_d1))
+
+    for b in [t] + list(variantes):
+        if b.startswith('v') and len(b) >= 3:
+            _add('u' + b[1:])
+        elif b.startswith('u') and len(b) >= 3:
+            _add('v' + b[1:])
+        if 'i' in b and len(b) >= 4:
+            _add(re.sub(r'(?<=[bcdfghjklmnpqrstvwxyz])i(?=[aeiou])', 'l', b))
+            _add(b.replace('ii', 'ie'))
+            _add(b.replace('ii', 'n'))
+        if len(b) >= 5 and b.endswith('o'):
+            _add(b[:-1] + 'a')
+
+    return variantes
+
+
+def _es_consulta_ratio_alb_creat(tokens: List[str]) -> bool:
+    """Detecta co-ocurrencia clínica de albúmina + creatinina sin calcio ni recolección horaria."""
+    tok_set = set(tokens)
+    for t in list(tok_set):
+        tok_set.update(_variantes_ocr_token(t))
+        if t in ALIAS_CLINICOS_MAP:
+            tok_set.update(ALIAS_CLINICOS_MAP[t].split())
+    tiene_alb = any(t.startswith('alb') for t in tok_set)
+    tiene_creat = any(t.startswith('creat') or t == 'cre' for t in tok_set)
+    tiene_exclusion = any(
+        t in ('calcio', 'ca', '24h', '24hs', '2hs', 'clearence', 'clearance')
+        for t in tok_set
+    )
+    es_par_cursivo_rac = (
+        ('wuite' in tok_set or 'cuite' in tok_set or 'cociente' in tok_set)
+        and ('aisiat' in tok_set or 'aislaet' in tok_set or 'alb' in tok_set or 'albuminuria' in tok_set)
+    )
+    return ((tiene_alb and tiene_creat) or es_par_cursivo_rac) and not tiene_exclusion
+
+
+def _estudio_es_rac(estudio_norm: str) -> bool:
+    """Identifica si un estudio del catálogo corresponde al cociente albúmina/creatinina (RAC/CAC)."""
+    palabras = [w for w in re.split(r'[\s/()]+', estudio_norm) if w]
+    p_set = set(palabras)
+    if 'rac' in p_set or 'cac' in p_set:
+        return True
+    tiene_alb = any(w.startswith('alb') for w in palabras)
+    tiene_cre = any(w.startswith('cre') for w in palabras)
+    return tiene_alb and tiene_cre and ('calcio' not in p_set)
 
 
 def _esqueleto_consonantico(palabra: str) -> str:
@@ -188,7 +314,8 @@ class OCRIntegrationService:
         min_score: float = 80.0
     ) -> float:
         """Calcula el grado de coincidencia entre un texto detectado y un estudio clínico."""
-        texto_norm = normalizar_texto_clinico(texto_detectado)
+        texto_pre = _normalizar_plus_ocr(texto_detectado)
+        texto_norm = normalizar_texto_clinico(texto_pre)
         estudio_norm = normalizar_texto_clinico(nombre_estudio)
         codigo_norm = str(codigo_practica or '').upper().strip()
 
@@ -198,10 +325,11 @@ class OCRIntegrationService:
         if texto_norm.upper() == codigo_norm:
             return 100.0
 
-        palabras_texto = texto_norm.split()
-        palabras_estudio = estudio_norm.split()
+        palabras_texto = [p for p in re.split(r'[\s/]+', texto_norm) if p]
+        palabras_estudio = [w for w in re.split(r'[\s/()]+', estudio_norm) if w]
 
-        conceptos_busqueda = set()
+        conceptos_busqueda: Set[str] = set()
+        conceptos_ocr: Set[str] = set()
         conceptos_busqueda.add(texto_norm)
         if texto_norm in ALIAS_CLINICOS_MAP:
             conceptos_busqueda.add(ALIAS_CLINICOS_MAP[texto_norm])
@@ -219,10 +347,59 @@ class OCRIntegrationService:
             conceptos_busqueda.add(p)
             if p in ALIAS_CLINICOS_MAP:
                 conceptos_busqueda.add(ALIAS_CLINICOS_MAP[p])
+            for var_p in _variantes_ocr_token(p):
+                conceptos_ocr.add(var_p)
+                if var_p in ALIAS_CLINICOS_MAP:
+                    conceptos_ocr.add(ALIAS_CLINICOS_MAP[var_p])
+            if len(p) >= 6 and p not in ALIAS_CLINICOS_MAP:
+                for k_alias, v_alias in ALIAS_CLINICOS_MAP.items():
+                    if len(k_alias) >= 6 and fuzz.ratio(p, k_alias) >= 85.0:
+                        conceptos_ocr.add(v_alias)
+
+        if 'uremia' in conceptos_busqueda or 'urea' in conceptos_busqueda:
+            conceptos_busqueda.update({'urea', 'uremia'})
+        if 'uremia' in conceptos_ocr or 'urea' in conceptos_ocr:
+            conceptos_ocr.update({'urea', 'uremia'})
 
         max_score = 0.0
 
-        for concepto in conceptos_busqueda:
+        es_match_rac = _es_consulta_ratio_alb_creat(palabras_texto) and _estudio_es_rac(estudio_norm)
+        if es_match_rac:
+            max_score = max(max_score, 96.0)
+
+        if estudio_norm in ('lipidograma', 'perfil lipidico') and (
+            texto_norm in _MARCADORES_PERFIL_LIPIDICO
+            or any(p in _MARCADORES_PERFIL_LIPIDICO for p in palabras_texto)
+            or any(c in ('lipidograma', 'perfil lipidico', 'colesterol') for c in conceptos_busqueda)
+        ):
+            max_score = max(max_score, 96.0)
+
+        palabras_estudio_utiles = [w for w in palabras_estudio if w not in STOPWORDS_MEDICAS]
+        token_primario_estudio = palabras_estudio_utiles[0] if palabras_estudio_utiles else ''
+        todos_conceptos = [
+            c for c in (conceptos_busqueda | conceptos_ocr)
+            if c and c not in STOPWORDS_MEDICAS
+        ]
+        conceptos_todos_tokens: Set[str] = set()
+        for c_item in (conceptos_busqueda | conceptos_ocr):
+            conceptos_todos_tokens.update(c_item.split())
+        tiene_calificador_no_solicitado = (
+            not es_match_rac
+            and any(
+                w in _CALIFICADORES_DIFERENCIALES and w not in conceptos_todos_tokens
+                for w in palabras_estudio
+            )
+        )
+        sim_token_primario = (
+            max((fuzz.ratio(c, token_primario_estudio) for c in todos_conceptos), default=0.0)
+            if token_primario_estudio
+            else 100.0
+        )
+
+        for concepto, es_ocr_var in (
+            [(c, False) for c in conceptos_busqueda]
+            + [(c, True) for c in conceptos_ocr if c not in conceptos_busqueda]
+        ):
             if concepto in STOPWORDS_MEDICAS:
                 continue
 
@@ -233,14 +410,32 @@ class OCRIntegrationService:
                 if w_estudio in STOPWORDS_MEDICAS:
                     continue
 
+                es_token_secundario_sin_primario = (
+                    len(palabras_estudio_utiles) >= 2
+                    and w_estudio != token_primario_estudio
+                    and sim_token_primario < 55.0
+                )
+
                 if len(concepto) >= 3 and len(w_estudio) >= 3:
                     if concepto == w_estudio:
-                        return 100.0
+                        if tiene_calificador_no_solicitado and len(palabras_estudio_utiles) >= 2:
+                            if w_estudio == token_primario_estudio:
+                                max_score = max(max_score, 70.0)
+                            continue
+                        if not es_ocr_var:
+                            return 100.0
+                        max_score = max(max_score, 95.0)
+                        continue
                     ratio_palabra = fuzz.ratio(concepto, w_estudio)
+                    if es_token_secundario_sin_primario and ratio_palabra < 75.0:
+                        continue
                     umbral_palabra = 80.0 if min(len(concepto), len(w_estudio)) < 4 else min_score
                     if ratio_palabra >= umbral_palabra:
-                        max_score = max(max_score, ratio_palabra)
-                    elif esq_concepto and len(w_estudio) >= 6:
+                        val = min(94.0, ratio_palabra * 0.95) if es_ocr_var else ratio_palabra
+                        if tiene_calificador_no_solicitado and len(palabras_estudio_utiles) >= 2:
+                            val = min(val, 70.0)
+                        max_score = max(max_score, val)
+                    elif esq_concepto and len(w_estudio) >= 6 and not es_token_secundario_sin_primario:
                         esq_estudio = _esqueleto_consonantico(w_estudio)
                         if len(esq_concepto) >= 3 and len(esq_estudio) >= 4:
                             esq_ratio = fuzz.ratio(esq_concepto, esq_estudio)
@@ -251,43 +446,81 @@ class OCRIntegrationService:
                                 and (ratio_palabra >= 58.0 or concepto[0] == w_estudio[0])
                             ):
                                 score_skel = min(84.0, 0.55 * esq_ratio + 0.45 * max(partial_ratio, ratio_palabra))
+                                if tiene_calificador_no_solicitado and len(palabras_estudio_utiles) >= 2:
+                                    score_skel = min(score_skel, 70.0)
                                 if score_skel >= min_score:
                                     max_score = max(max_score, score_skel)
 
             if len(concepto.split()) > 1:
                 score_set = fuzz.token_set_ratio(concepto, estudio_norm)
                 if score_set >= 80:
-                    max_score = max(max_score, score_set)
+                    val = min(94.0, score_set * 0.95) if es_ocr_var else score_set
+                    if tiene_calificador_no_solicitado and len(palabras_estudio_utiles) >= 2:
+                        val = min(val, 70.0)
+                    max_score = max(max_score, val)
                 elif min_score < 80.0:
                     score_sort = fuzz.token_sort_ratio(concepto, estudio_norm)
+                    if len(palabras_estudio_utiles) >= 2 and sim_token_primario < 55.0 and score_sort < 75.0:
+                        continue
                     if score_sort >= min_score:
-                        max_score = max(max_score, score_sort)
+                        val = min(94.0, score_sort * 0.95) if es_ocr_var else score_sort
+                        if tiene_calificador_no_solicitado and len(palabras_estudio_utiles) >= 2:
+                            val = min(val, 70.0)
+                        max_score = max(max_score, val)
 
         return round(float(max_score), 2)
 
     @staticmethod
     def _dividir_subsegmentos(raw_texto: str) -> List[str]:
-        """Divide un renglón compuesto en posibles sub-segmentos individuales (incluyendo abreviaturas por espacio)."""
+        """Divide un renglón compuesto en sub-segmentos preservando ratios clínicos (Alb/Creat) y tokens '+g'."""
+        texto_pre = _normalizar_plus_ocr(raw_texto)
         partes_base = [
             p.strip()
-            for p in re.split(r'[,;/+]|\s+-\s+|\s+y\s+', str(raw_texto or ''), flags=re.IGNORECASE)
+            for p in re.split(r'[,;]|\s+\+\s+|\s+-\s+|\s+y\s+', texto_pre, flags=re.IGNORECASE)
             if p and p.strip()
         ]
+        partes_expandidas: List[str] = []
+        for p in partes_base:
+            if '/' in p:
+                toks_p = [t for t in re.split(r'[\s/]+', normalizar_texto_clinico(p)) if t]
+                es_ratio = (
+                    any(
+                        t in _RATIO_CLINICO_KEYWORDS
+                        or any(v in _RATIO_CLINICO_KEYWORDS for v in _variantes_ocr_token(t))
+                        or (len(t) >= 6 and max(fuzz.ratio(t, rk) for rk in ('cociente', 'relacion')) >= 80)
+                        for t in toks_p
+                    )
+                    or _es_consulta_ratio_alb_creat(toks_p)
+                )
+                if es_ratio:
+                    partes_expandidas.append(p)
+                else:
+                    partes_expandidas.extend(sub.strip() for sub in p.split('/') if sub and sub.strip())
+            else:
+                partes_expandidas.append(p)
+
         resultado: List[str] = []
-        for parte in partes_base:
+        for parte in partes_expandidas:
             parte_norm = normalizar_texto_clinico(parte)
             if len(parte_norm) < 2:
                 continue
 
             tokens_utiles = [
-                t for t in parte_norm.split()
+                t for t in re.split(r'[\s/]+', parte_norm)
                 if len(t) >= 2 and t not in STOPWORDS_MEDICAS
             ]
-            alias_conocidos = [t for t in tokens_utiles if t in ALIAS_CLINICOS_MAP]
+            if _es_consulta_ratio_alb_creat(tokens_utiles):
+                resultado.append(parte)
+                continue
+
+            alias_conocidos = [
+                t for t in tokens_utiles
+                if t in ALIAS_CLINICOS_MAP or any(v in ALIAS_CLINICOS_MAP for v in _variantes_ocr_token(t))
+            ]
             if (
                 len(tokens_utiles) >= 2
                 and len(alias_conocidos) >= 2
-                and parte_norm not in ALIAS_CLINICOS_MAP
+                and (parte_norm not in ALIAS_CLINICOS_MAP or len(alias_conocidos) == len(tokens_utiles))
             ):
                 resultado.extend(tokens_utiles)
             else:
@@ -379,6 +612,19 @@ class OCRIntegrationService:
 
         return round(max(0.0, min(100.0, score)), 2)
 
+    @staticmethod
+    def _disparador_coincide_texto(disp: str, texto_norm: str) -> bool:
+        """Verifica coincidencia de un disparador evitando que 1 palabra active baterías largas vía token_set_ratio."""
+        if not disp or not texto_norm:
+            return False
+        if disp in texto_norm:
+            return True
+        if fuzz.token_sort_ratio(disp, texto_norm) >= 84:
+            return True
+        if len(texto_norm.split()) >= len(disp.split()) and fuzz.token_set_ratio(disp, texto_norm) >= 85:
+            return True
+        return False
+
     @classmethod
     def _buscar_mejor_combo_para_texto(
         cls,
@@ -397,7 +643,7 @@ class OCRIntegrationService:
 
             coincidencias = [
                 disp for disp in disparadores_validos
-                if disp in texto_norm or fuzz.token_set_ratio(disp, texto_norm) >= 82
+                if cls._disparador_coincide_texto(disp, texto_norm)
             ]
             if coincidencias:
                 exacto = 1 if any(disp == texto_norm for disp in coincidencias) else 0
@@ -414,7 +660,8 @@ class OCRIntegrationService:
     def _calcular_ajuste_reputacion(votos_pos: Any, votos_neg: Any) -> Tuple[float, float]:
         """
         Calcula el delta progresivo de similitud y el peso de voto en el consenso multi-recorte
-        a partir de votos_positivos y votos_negativos. Nunca desactiva un recorte (peso >= 0.25).
+        a partir de votos_positivos y votos_negativos. Mantiene el delta acotado para no
+        penalizar globalmente trazos válidos entre recetas distintas.
         """
         p = max(0, int(votos_pos or 0))
         n = max(0, int(votos_neg or 0))
@@ -422,9 +669,9 @@ class OCRIntegrationService:
             return (0.0, 1.0)
         balance = (p - n) / float(p + n + 4)
         if balance >= 0:
-            ajuste_score = round(min(5.0, balance * 6.5), 2)
+            ajuste_score = round(min(4.0, balance * 5.5), 2)
         else:
-            ajuste_score = round(max(-12.0, balance * 15.0), 2)
+            ajuste_score = round(max(-5.0, balance * 6.0), 2)
         peso_voto = round(max(0.25, min(2.0, 1.0 + 0.15 * p - 0.25 * n)), 3)
         return (ajuste_score, peso_voto)
 
@@ -483,6 +730,11 @@ class OCRIntegrationService:
         estudios_por_id = {e.id: e for e in estudios_activos}
         candidatos_por_id: Dict[int, Dict[str, Any]] = {}
         mejor_por_segmento: Dict[str, Tuple[int, float]] = {}
+        mejor_tie_por_segmento: Dict[str, Tuple[Any, ...]] = {}
+        sub_segmentos: List[str] = (
+            cls._dividir_subsegmentos(raw_texto) if not es_manuscrito_sin_texto else []
+        )
+        es_renglon_multi_segmento = not es_manuscrito_sin_texto and len(sub_segmentos) > 1
         combo_detectado = None
         imagen_muestra_conocida = ''
         imagenes_muestra_conocidas: List[str] = []
@@ -491,14 +743,20 @@ class OCRIntegrationService:
         recorte_ids_en_trazos: Set[int] = set()
         imagenes_en_trazos: Set[str] = set()
         imagenes_secundarias: Dict[str, Tuple[List[int], float]] = {}
+        imagenes_negativas_excluidas: Set[str] = set()
+        estudios_texto_resueltos: Set[int] = set()
+        paso0_preseleccionados_debiles: Set[int] = set()
         neg_map = negativos_por_recorte or {}
         neg_preps_por_fb_id: Dict[int, Any] = {}
+
+        def _es_recorte_negativo_excluido(v_pos: int, v_neg: int) -> bool:
+            return v_pos == 0 and v_neg >= 2
 
         def _agregar_imagen_muestra(img_str: Any) -> None:
             if not isinstance(img_str, str):
                 return
             limpia = img_str.strip()
-            if not limpia or limpia in imagenes_muestra_vistas:
+            if not limpia or limpia in imagenes_muestra_vistas or limpia in imagenes_negativas_excluidas:
                 return
             imagenes_muestra_vistas.add(limpia)
             imagenes_muestra_conocidas.append(limpia)
@@ -511,7 +769,7 @@ class OCRIntegrationService:
             if not isinstance(img_str, str):
                 return
             limpia = img_str.strip()
-            if not limpia or limpia in imagenes_en_trazos:
+            if not limpia or limpia in imagenes_en_trazos or limpia in imagenes_negativas_excluidas:
                 return
             ids_validos = [eid for eid in est_ids if eid in estudios_por_id]
             if not ids_validos:
@@ -553,10 +811,10 @@ class OCRIntegrationService:
                     imgs_neg_por_id.get(fb_id, '') or '',
                 )
 
-        def _calcular_max_sim_neg(rid: int) -> float:
-            max_sim = 0.0
+        def _calcular_max_sim_neg(rid: int) -> Tuple[float, float]:
+            max_sim_cv = 0.0
+            max_sim_vhash = 0.0
             for fb_id, firma_neg in neg_map.get(rid, []):
-                sim_neg = 0.0
                 prep_neg = neg_preps_por_fb_id.get(fb_id) if query_crop is not None else None
                 if query_crop is not None and prep_neg is not None:
                     sim_neg = VisualMatcherService.comparar_preparados(
@@ -564,11 +822,84 @@ class OCRIntegrationService:
                         prep_neg,
                         pesos=pesos_visuales,
                     )
+                    if sim_neg > max_sim_cv:
+                        max_sim_cv = sim_neg
                 elif firma_norm and firma_neg:
                     sim_neg = cls.calcular_similitud_visual(firma_norm, firma_neg)
-                if sim_neg > max_sim:
-                    max_sim = sim_neg
-            return max_sim
+                    if sim_neg > max_sim_vhash:
+                        max_sim_vhash = sim_neg
+            return max_sim_cv, max_sim_vhash
+
+        def _aplicar_penalizacion_negativa(
+            sv_in: float,
+            max_sim_cv: float,
+            max_sim_vhash: float,
+            peso_voto_in: float = 1.0,
+        ) -> Tuple[float, float]:
+            sv_out = float(sv_in)
+            peso_out = float(peso_voto_in)
+            pen_cv = (
+                round(min(22.0, 8.0 + ((max_sim_cv - 48.0) / 52.0) * 14.0), 2)
+                if max_sim_cv >= 48.0
+                else 0.0
+            )
+            pen_vhash = (
+                round(min(22.0, 8.0 + ((max_sim_vhash - 78.0) / 22.0) * 14.0), 2)
+                if max_sim_vhash >= 78.0
+                else 0.0
+            )
+            pen = max(pen_cv, pen_vhash)
+            if pen > 0.0:
+                sv_out -= pen
+                if max_sim_cv >= 80.0 or max_sim_vhash >= 92.0:
+                    peso_out *= 0.25
+            return sv_out, peso_out
+
+        def _tie_key_segmento(
+            seg_key: str,
+            estudio: Estudios,
+            score_val: float,
+            veces_val: int,
+            origen_val: str,
+        ) -> Tuple[Any, ...]:
+            seg_upper = seg_key.upper().strip()
+            cod_upper = str(estudio.codigo_practica or '').upper().strip()
+            exact_code = 1 if (seg_upper and cod_upper and seg_upper == cod_upper) else 0
+            seg_toks = [t for t in re.split(r'[\s/]+', seg_key) if t and t not in STOPWORDS_MEDICAS]
+            seg_raw_set = set(seg_toks)
+            seg_concepts: Set[str] = set(seg_raw_set)
+            for tok in seg_toks:
+                for v_tok in _variantes_ocr_token(tok):
+                    if v_tok not in STOPWORDS_MEDICAS:
+                        seg_concepts.add(v_tok)
+                    if v_tok in ALIAS_CLINICOS_MAP:
+                        seg_concepts.update(ALIAS_CLINICOS_MAP[v_tok].split())
+                if tok in ALIAS_CLINICOS_MAP:
+                    seg_concepts.update(ALIAS_CLINICOS_MAP[tok].split())
+            if seg_key in ALIAS_CLINICOS_MAP:
+                seg_concepts.update(ALIAS_CLINICOS_MAP[seg_key].split())
+            est_toks = [
+                w for w in re.split(r'[\s/()]+', normalizar_texto_clinico(estudio.nombre))
+                if w and w not in STOPWORDS_MEDICAS
+            ]
+            direct_hits = sum(1 for w in set(est_toks) if w in seg_raw_set)
+            concept_hits = sum(1 for w in set(est_toks) if w in seg_concepts)
+            starts_match = (
+                2 if (est_toks and est_toks[0] in seg_raw_set)
+                else (1 if (est_toks and est_toks[0] in seg_concepts) else 0)
+            )
+            extra_toks = sum(1 for w in est_toks if w not in seg_concepts)
+            origen_prio = 1 if origen_val in ('COMBO_RUTINA', 'MEMORIA_APRENDIDA') else 0
+            return (
+                round(float(score_val), 2),
+                exact_code,
+                direct_hits,
+                concept_hits,
+                starts_match,
+                -extra_toks,
+                int(veces_val or 0),
+                origen_prio,
+            )
 
         def _registrar_candidato(
             estudio: Estudios,
@@ -605,18 +936,23 @@ class OCRIntegrationService:
                 actual['preseleccionado'] = presel_final
 
             if segmento_key:
-                prev_seg = mejor_por_segmento.get(segmento_key)
-                if prev_seg is None or score > prev_seg[1]:
+                tie_key = _tie_key_segmento(segmento_key, estudio, score, veces_confirmado, origen)
+                prev_tie = mejor_tie_por_segmento.get(segmento_key)
+                if prev_tie is None or tie_key > prev_tie:
+                    mejor_tie_por_segmento[segmento_key] = tie_key
                     mejor_por_segmento[segmento_key] = (estudio.id, score)
 
         # Paso 0: Descarte visual prioritario y búsqueda por consenso multi-recorte en RecorteImagenEstudio
         usando_imagen_real = query_crop is not None
+        mejor_score_trazo = 0.0
+        top_score_estudio_paso0 = 0.0
+        umbral_directo = 78.0 if usando_imagen_real else 92.0
         if usando_imagen_real or firma_norm:
-            umbral_descarte = 86.0 if usando_imagen_real else 88.0
-            umbral_coincidencia = 80.0 if usando_imagen_real else 82.0
-            umbral_consenso = 82.0 if usando_imagen_real else 85.0
-            umbral_ganador = 80.0 if usando_imagen_real else 84.0
-            umbral_directo = 88.0 if usando_imagen_real else 92.0
+            umbral_descarte = 68.0 if usando_imagen_real else 88.0
+            umbral_coincidencia = 40.0 if usando_imagen_real else 82.0
+            umbral_consenso = 76.0 if usando_imagen_real else 85.0
+            umbral_ganador = 76.0 if usando_imagen_real else 84.0
+            margen_descarte = 5.0 if usando_imagen_real else 0.0
 
             max_sv_descarte = 0.0
             if usando_imagen_real:
@@ -624,7 +960,8 @@ class OCRIntegrationService:
                     descartes_scores = VisualMatcherService.buscar_mejores_coincidencias(
                         query_crop,
                         descartes_preparados,
-                        top_k_stage1=10
+                        top_k_stage1=25,
+                        pesos=pesos_visuales,
                     )
                     if descartes_scores:
                         max_sv_descarte = max(descartes_scores.values())
@@ -635,13 +972,15 @@ class OCRIntegrationService:
                         max_sv_descarte = sv_desc
 
             mejor_recorte_id = None
-            mejor_score_trazo = 0.0
             coincidencias_por_estudio: Dict[int, int] = {}
             peso_acumulado_por_estudio: Dict[int, float] = {}
             suma_score_ponderado: Dict[int, float] = {}
             mejor_score_por_estudio: Dict[int, float] = {}
             mejor_recorte_por_estudio: Dict[int, int] = {}
             recortes_coincidentes_detallados: List[
+                Tuple[int, float, float, List[int], Dict[str, float]]
+            ] = []
+            candidatos_manuscrito_fallback: List[
                 Tuple[int, float, float, List[int], Dict[str, float]]
             ] = []
 
@@ -671,7 +1010,7 @@ class OCRIntegrationService:
                         scores_cv = VisualMatcherService.buscar_mejores_coincidencias_detallado(
                             query_crop,
                             candidatos_cv,
-                            top_k_stage1=25,
+                            top_k_stage1=80,
                             pesos=pesos_visuales,
                         )
                         for rec_id, (sv_base, metricas_cv) in scores_cv.items():
@@ -713,12 +1052,16 @@ class OCRIntegrationService:
                     rec_ids_hidratar = [
                         rec_id
                         for rec_id, _, _, sv_base, _, _, _ in pares_evaluados
-                        if sv_base >= (umbral_coincidencia - 5.0)
+                        if sv_base >= (umbral_coincidencia - 6.0)
                     ]
                     _asegurar_negativos_hidratados(rec_ids_hidratar)
 
-                umbral_boost = 76.0 if usando_imagen_real else 78.0
+                umbral_boost = 50.0 if usando_imagen_real else 78.0
                 for rec_id, texto_det_norm, est_ids_validos, sv_base, metricas_cv, votos_pos, votos_neg in pares_evaluados:
+                    # Excluir recortes negativos sin validación positiva (vp==0, vn>=2) en coincidencias moderadas
+                    # sin desactivar jamás coincidencias visuales directas/genuinas (>= umbral_ganador)
+                    if _es_recorte_negativo_excluido(votos_pos, votos_neg) and sv_base < umbral_ganador:
+                        continue
                     sv = sv_base
                     if (
                         sv_base >= umbral_boost
@@ -728,31 +1071,18 @@ class OCRIntegrationService:
                         and fuzz.ratio(texto_norm, texto_det_norm) >= 65
                     ):
                         sv = min(100.0, round(sv_base + 2.5, 2))
-                    elif (
-                        usando_imagen_real
-                        and 80.0 <= sv < 88.0
-                        and not es_manuscrito_sin_texto
-                        and texto_det_norm
-                        and len(texto_norm) >= 4
-                        and len(texto_det_norm) >= 4
-                        and fuzz.ratio(texto_norm, texto_det_norm) < 35
-                    ):
-                        sv = max(0.0, round(sv - 6.0, 2))
 
                     score_base = round(float(sv), 2)
                     ajuste_rep, peso_voto = cls._calcular_ajuste_reputacion(votos_pos, votos_neg)
                     sv = sv + ajuste_rep
 
-                    max_sim_neg = _calcular_max_sim_neg(rec_id)
-
-                    if max_sim_neg >= 78.0:
-                        penalizacion_neg = round(
-                            min(22.0, 8.0 + ((max_sim_neg - 78.0) / 22.0) * 14.0),
-                            2,
-                        )
-                        sv -= penalizacion_neg
-                        if max_sim_neg >= 92.0:
-                            peso_voto *= 0.25
+                    max_sim_cv, max_sim_vhash = _calcular_max_sim_neg(rec_id)
+                    sv, peso_voto = _aplicar_penalizacion_negativa(
+                        sv,
+                        max_sim_cv,
+                        max_sim_vhash,
+                        peso_voto_in=peso_voto,
+                    )
 
                     sv = round(max(0.0, min(100.0, sv)), 2)
 
@@ -764,19 +1094,34 @@ class OCRIntegrationService:
                             est_ids_validos,
                             dict(metricas_cv) if metricas_cv else {},
                         ))
+                        n_ests = len(est_ids_validos)
+                        factor_especif = (
+                            1.0
+                            if n_ests == 1
+                            else (0.75 if n_ests == 2 else max(0.25, 1.0 / float(n_ests)))
+                        )
+                        peso_efectivo = peso_voto * factor_especif
                         for eid in est_ids_validos:
                             coincidencias_por_estudio[eid] = coincidencias_por_estudio.get(eid, 0) + 1
-                            peso_acumulado_por_estudio[eid] = peso_acumulado_por_estudio.get(eid, 0.0) + peso_voto
-                            suma_score_ponderado[eid] = suma_score_ponderado.get(eid, 0.0) + (sv * peso_voto)
+                            peso_acumulado_por_estudio[eid] = peso_acumulado_por_estudio.get(eid, 0.0) + peso_efectivo
+                            suma_score_ponderado[eid] = suma_score_ponderado.get(eid, 0.0) + (sv * peso_efectivo)
                             if sv > mejor_score_por_estudio.get(eid, 0.0):
                                 mejor_score_por_estudio[eid] = sv
                                 mejor_recorte_por_estudio[eid] = rec_id
+                    elif es_manuscrito_sin_texto and usando_imagen_real and sv >= 28.0:
+                        candidatos_manuscrito_fallback.append((
+                            rec_id,
+                            sv,
+                            score_base,
+                            est_ids_validos,
+                            dict(metricas_cv) if metricas_cv else {},
+                        ))
 
                     if sv > mejor_score_trazo:
                         mejor_score_trazo = sv
                         mejor_recorte_id = rec_id
 
-            if max_sv_descarte >= umbral_descarte and max_sv_descarte >= mejor_score_trazo:
+            if max_sv_descarte >= umbral_descarte and max_sv_descarte >= (mejor_score_trazo + margen_descarte):
                 return {
                     'indice': indice,
                     'texto_renglon': raw_texto,
@@ -788,6 +1133,10 @@ class OCRIntegrationService:
                     'trazos_coincidentes': [],
                     'recomendados': []
                 }
+
+            if es_manuscrito_sin_texto and not recortes_coincidentes_detallados and candidatos_manuscrito_fallback:
+                candidatos_manuscrito_fallback.sort(key=lambda item: item[1], reverse=True)
+                recortes_coincidentes_detallados.extend(candidatos_manuscrito_fallback[:3])
 
             if recortes_coincidentes_detallados:
                 recortes_coincidentes_detallados.sort(key=lambda item: item[1], reverse=True)
@@ -834,8 +1183,13 @@ class OCRIntegrationService:
                             2,
                         ),
                     )
+                    umbral_ganador_est = (
+                        umbral_directo
+                        if (es_manuscrito_sin_texto and usando_imagen_real)
+                        else umbral_ganador
+                    )
                     if (
-                        mejor_score_por_estudio.get(eid, 0.0) >= umbral_ganador
+                        mejor_score_por_estudio.get(eid, 0.0) >= umbral_ganador_est
                         or (cnt >= 2 and score_estudio >= umbral_consenso)
                     ):
                         estudios_elegibles.append((eid, score_estudio, peso_acc, cnt))
@@ -853,6 +1207,7 @@ class OCRIntegrationService:
                     imagen_muestra_conocida = img_ganadora
 
                     top_score_estudio = estudios_elegibles[0][1]
+                    top_score_estudio_paso0 = top_score_estudio
                     top_recorte_eids = set(recortes_coincidentes_detallados[0][3])
                     mejor_score_top_recorte = max(
                         (s for e, s, _, _ in estudios_elegibles if e in top_recorte_eids),
@@ -871,6 +1226,8 @@ class OCRIntegrationService:
                         )
                         rec_id_est = mejor_recorte_por_estudio.get(eid, top_recorte_id_final)
                         img_est = (imagenes_por_rec_id.get(rec_id_est) or '').strip() or img_ganadora
+                        if es_presel and score_estudio < umbral_directo:
+                            paso0_preseleccionados_debiles.add(eid)
                         _registrar_candidato(
                             estudio=estudios_por_id[eid],
                             score=score_estudio,
@@ -881,9 +1238,12 @@ class OCRIntegrationService:
                         )
 
                     if (
-                        mejor_score_trazo >= umbral_directo
-                        or top_score_estudio >= umbral_directo
-                        or es_manuscrito_sin_texto
+                        (
+                            mejor_score_trazo >= umbral_directo
+                            or top_score_estudio >= umbral_directo
+                            or es_manuscrito_sin_texto
+                        )
+                        and not es_renglon_multi_segmento
                     ):
                         recomendados_trazo = sorted(
                             candidatos_por_id.values(),
@@ -907,20 +1267,23 @@ class OCRIntegrationService:
                             ),
                             'imagen_muestra_conocida': imagen_muestra_conocida,
                             'imagenes_muestra_conocidas': imagenes_muestra_conocidas,
-                            'trazos_coincidentes': trazos_coincidentes,
+                            'trazos_coincidentes': trazos_coincidentes[:6],
                             'recomendados': recomendados_trazo
                         }
 
         # Paso 1: Baterías / Combos (PerfilEstudioPatron) por texto y respaldo por imagen/huella visual
         patron_combo = None
+        patron_combo_por_texto = False
         score_combo = 100.0
         if not es_manuscrito_sin_texto:
             patron_combo, _ = cls._buscar_mejor_combo_para_texto(texto_norm, patrones_activos)
+            if patron_combo:
+                patron_combo_por_texto = True
 
         if not patron_combo and (usando_imagen_real or firma_norm):
             mejor_combo_visual = None
             mejor_score_visual = 0.0
-            umbral_combo_visual = 80.0 if usando_imagen_real else 84.0
+            umbral_combo_visual = 76.0 if usando_imagen_real else 84.0
             for patron in patrones_activos:
                 img_patron = patron.imagen_muestra or ''
                 if usando_imagen_real:
@@ -963,6 +1326,8 @@ class OCRIntegrationService:
             for est_id in (patron_combo.estudios_ids or []):
                 est = estudios_por_id.get(est_id)
                 if est and (texto_norm, est.id) not in pares_descartados:
+                    if patron_combo_por_texto:
+                        estudios_texto_resueltos.add(est.id)
                     _registrar_candidato(
                         estudio=est,
                         score=score_combo,
@@ -973,10 +1338,8 @@ class OCRIntegrationService:
                     )
 
         # Paso 2: Sub-segmentos y Alias Aprendidos (EstudioAliasAprendido) por texto y trazo visual
-        sub_segmentos: List[str] = []
         segmentos_con_norm: List[Tuple[str, str]] = []
         if not es_manuscrito_sin_texto:
-            sub_segmentos = cls._dividir_subsegmentos(raw_texto)
             segmentos_evaluar = [raw_texto]
             if len(sub_segmentos) > 1:
                 segmentos_evaluar.extend(sub_segmentos)
@@ -1006,9 +1369,15 @@ class OCRIntegrationService:
                     return cls.calcular_similitud_visual(firma_norm, vhash_alias)
             return 0.0
 
-        umbral_alias_visual = 80.0 if usando_imagen_real else 82.0
+        umbral_alias_visual = 76.0 if usando_imagen_real else 82.0
 
-        for _, seg_norm in segmentos_con_norm:
+        for seg_raw, seg_norm in segmentos_con_norm:
+            seg_pre = normalizar_texto_clinico(_normalizar_plus_ocr(seg_raw))
+            seg_cmp = ' '.join((seg_pre or seg_norm).replace('/', ' ').split())
+            tokens_seg = seg_cmp.split()
+            tokens_seg_opts = [[t] + _variantes_ocr_token(t) for t in tokens_seg]
+            tiene_vars_seg = any(len(opts) > 1 for opts in tokens_seg_opts)
+            alias_matches_seg: List[Tuple[EstudioAliasAprendido, float, float, str]] = []
             for alias in alias_activos:
                 estudio = alias.estudio
                 if not estudio or not estudio.activo:
@@ -1019,15 +1388,60 @@ class OCRIntegrationService:
                 patron_norm = normalizar_texto_clinico(alias.texto_patron)
                 if not patron_norm:
                     continue
+                pat_cmp = ' '.join(patron_norm.replace('/', ' ').split())
 
                 score_alias = 0.0
+                score_alias_texto = 0.0
                 if not patron_norm.startswith('vhash '):
-                    if seg_norm == patron_norm or (len(patron_norm) >= 4 and patron_norm in seg_norm):
-                        score_alias = 100.0
-                    elif len(seg_norm) >= 3 and len(patron_norm) >= 3:
-                        ratio = max(fuzz.ratio(seg_norm, patron_norm), fuzz.token_set_ratio(seg_norm, patron_norm))
-                        if ratio >= 78:
-                            score_alias = min(100.0, round(ratio + min(12.0, alias.veces_confirmado * 2.5), 2))
+                    seg_best = seg_cmp
+                    if tiene_vars_seg:
+                        tokens_pat_tmp = pat_cmp.split()
+                        if len(tokens_seg) == 1:
+                            seg_best = max(
+                                tokens_seg_opts[0],
+                                key=lambda o: fuzz.ratio(o, pat_cmp),
+                            )
+                        elif tokens_pat_tmp:
+                            seg_best = ' '.join(
+                                max(opts, key=lambda o: max(fuzz.ratio(o, pt) for pt in tokens_pat_tmp))
+                                for opts in tokens_seg_opts
+                            )
+                    if (
+                        seg_norm == patron_norm
+                        or seg_cmp == pat_cmp
+                        or (len(patron_norm) >= 4 and patron_norm in seg_norm)
+                        or (len(pat_cmp) >= 4 and pat_cmp in seg_cmp)
+                    ):
+                        score_alias_texto = 100.0
+                    elif seg_best != seg_cmp and (
+                        seg_best == pat_cmp
+                        or (len(pat_cmp) >= 4 and pat_cmp in seg_best)
+                    ):
+                        score_alias_texto = 95.0
+                    elif len(seg_cmp) >= 3 and len(pat_cmp) >= 3:
+                        tokens_pat = pat_cmp.split()
+                        cands_cmp = [(seg_cmp, False)]
+                        if seg_best != seg_cmp:
+                            cands_cmp.append((seg_best, True))
+                        for seg_eval, es_var_ocr in cands_cmp:
+                            if len(tokens_seg) == 1 and len(tokens_pat) == 1:
+                                ratio = fuzz.ratio(seg_eval, pat_cmp)
+                                umbral_fuzzy_alias = 86
+                            elif len(tokens_seg) >= len(tokens_pat):
+                                ratio = max(
+                                    fuzz.ratio(seg_eval, pat_cmp),
+                                    fuzz.token_set_ratio(seg_eval, pat_cmp),
+                                )
+                                umbral_fuzzy_alias = 82
+                            else:
+                                ratio = fuzz.token_sort_ratio(seg_eval, pat_cmp)
+                                umbral_fuzzy_alias = 82
+                            if ratio >= umbral_fuzzy_alias:
+                                base_r = min(94.0, ratio * 0.95) if es_var_ocr else ratio
+                                cand_sc = min(100.0, round(base_r + min(12.0, alias.veces_confirmado * 2.5), 2))
+                                if cand_sc > score_alias_texto:
+                                    score_alias_texto = cand_sc
+                    score_alias = score_alias_texto
 
                 if usando_imagen_real or firma_norm:
                     score_visual = _score_visual_alias(alias)
@@ -1035,23 +1449,46 @@ class OCRIntegrationService:
                         score_alias = max(score_alias, round(score_visual, 2))
 
                 if score_alias > 0.0:
-                    img_alias = alias.imagen_muestra or ''
-                    if img_alias:
-                        _agregar_imagen_muestra(img_alias)
-                        if not imagen_muestra_conocida:
-                            imagen_muestra_conocida = img_alias
-                        _registrar_imagen_secundaria(img_alias, [estudio.id], score_alias)
-                    _registrar_candidato(
-                        estudio=estudio,
-                        score=score_alias,
-                        origen='MEMORIA_APRENDIDA',
-                        veces_confirmado=alias.veces_confirmado,
-                        imagen_muestra=img_alias,
-                        preseleccionado=(score_alias >= 85.0),
-                        segmento_key=seg_norm if len(sub_segmentos) > 1 and seg_norm != texto_norm else ''
-                    )
+                    alias_matches_seg.append((alias, score_alias, score_alias_texto, pat_cmp))
+
+            for alias, score_alias, score_alias_texto, pat_cmp in alias_matches_seg:
+                estudio = alias.estudio
+                max_veces_grupo = max(
+                    (
+                        int(a_other.veces_confirmado or 0)
+                        for a_other, _, st_other, pat_other in alias_matches_seg
+                        if st_other >= 82.0
+                        and not (seg_cmp == pat_cmp and pat_other != pat_cmp)
+                        and (pat_other == pat_cmp or fuzz.ratio(pat_other, pat_cmp) >= 82)
+                    ),
+                    default=0,
+                )
+                es_minoritario_ruidoso = (
+                    max_veces_grupo >= 3
+                    and int(alias.veces_confirmado or 0) < max(2, max_veces_grupo // 2)
+                    and alias.estado_revision != 'REVISADO_JEFA'
+                    and score_alias_texto >= 82.0
+                )
+                if score_alias_texto >= 82.0 and not es_minoritario_ruidoso:
+                    estudios_texto_resueltos.add(estudio.id)
+                img_alias = alias.imagen_muestra or ''
+                if img_alias and not es_minoritario_ruidoso:
+                    _agregar_imagen_muestra(img_alias)
+                    if not imagen_muestra_conocida and img_alias.strip() not in imagenes_negativas_excluidas:
+                        imagen_muestra_conocida = img_alias
+                    _registrar_imagen_secundaria(img_alias, [estudio.id], score_alias)
+                _registrar_candidato(
+                    estudio=estudio,
+                    score=(min(score_alias, 74.0) if es_minoritario_ruidoso else score_alias),
+                    origen='MEMORIA_APRENDIDA',
+                    veces_confirmado=alias.veces_confirmado,
+                    imagen_muestra=('' if es_minoritario_ruidoso else img_alias),
+                    preseleccionado=(score_alias >= 85.0 and not es_minoritario_ruidoso),
+                    segmento_key=seg_norm if len(sub_segmentos) > 1 and seg_norm != texto_norm else ''
+                )
 
         if es_manuscrito_sin_texto and (usando_imagen_real or firma_norm):
+            umbral_alias_manuscrito = max(umbral_alias_visual, umbral_directo) if usando_imagen_real else umbral_alias_visual
             for alias in alias_activos:
                 estudio = alias.estudio
                 if not estudio or not estudio.activo:
@@ -1059,11 +1496,11 @@ class OCRIntegrationService:
                 if (texto_norm, estudio.id) in pares_descartados:
                     continue
                 score_visual = _score_visual_alias(alias)
-                if score_visual >= umbral_alias_visual:
+                if score_visual >= umbral_alias_manuscrito:
                     img_alias = alias.imagen_muestra or ''
                     if img_alias:
                         _agregar_imagen_muestra(img_alias)
-                        if not imagen_muestra_conocida:
+                        if not imagen_muestra_conocida and img_alias.strip() not in imagenes_negativas_excluidas:
                             imagen_muestra_conocida = img_alias
                         _registrar_imagen_secundaria(img_alias, [estudio.id], round(score_visual, 2))
                     _registrar_candidato(
@@ -1088,6 +1525,8 @@ class OCRIntegrationService:
                     min_score=55.0
                 )
                 if score_cat >= 55.0:
+                    if score_cat >= 86.0:
+                        estudios_texto_resueltos.add(estudio.id)
                     _registrar_candidato(
                         estudio=estudio,
                         score=score_cat,
@@ -1095,6 +1534,33 @@ class OCRIntegrationService:
                         preseleccionado=False,
                         segmento_key=seg_norm if len(sub_segmentos) > 1 and seg_norm != texto_norm else ''
                     )
+
+        # Reconciliación híbrida: si texto claro resolvió estudios y Paso 0 no superó umbral_directo,
+        # evitar que un match visual moderado de otro estudio domine recomendados o trazos_coincidentes.
+        if (
+            not es_manuscrito_sin_texto
+            and estudios_texto_resueltos
+            and mejor_score_trazo < umbral_directo
+            and top_score_estudio_paso0 < umbral_directo
+        ):
+            for eid_c, cand_c in list(candidatos_por_id.items()):
+                if eid_c not in estudios_texto_resueltos and (
+                    (cand_c.get('origen_deteccion') == 'MEMORIA_APRENDIDA' and cand_c.get('similitud_score', 0.0) < umbral_directo)
+                    or (eid_c in paso0_preseleccionados_debiles and cand_c.get('similitud_score', 0.0) < 86.0)
+                ):
+                    cand_c['preseleccionado'] = False
+            if trazos_coincidentes:
+                trazos_filtrados = [
+                    t for t in trazos_coincidentes
+                    if (set(t.get('estudios_ids') or []) & estudios_texto_resueltos)
+                    or t.get('similitud_score', 0.0) >= umbral_directo
+                ]
+                if len(trazos_filtrados) != len(trazos_coincidentes):
+                    trazos_coincidentes = trazos_filtrados
+                    recorte_ids_en_trazos = {t['recorte_id'] for t in trazos_coincidentes}
+                    imagenes_en_trazos = {
+                        t['imagen_muestra'] for t in trazos_coincidentes if t.get('imagen_muestra')
+                    }
 
         # Paso 4: Selección y Ranking de Recomendados del Renglón
         if len(sub_segmentos) > 1:
@@ -1106,11 +1572,74 @@ class OCRIntegrationService:
                     if cand_seg:
                         cand_seg['preseleccionado'] = True
 
+        query_concept_tokens: Set[str] = set()
+        if not es_manuscrito_sin_texto and texto_norm:
+            texto_pre_q = normalizar_texto_clinico(_normalizar_plus_ocr(raw_texto))
+            toks_q = [t for t in re.split(r'[\s/]+', texto_pre_q or texto_norm) if t]
+            for tok in toks_q:
+                if tok not in STOPWORDS_MEDICAS:
+                    query_concept_tokens.add(tok)
+                for var_tok in _variantes_ocr_token(tok):
+                    if var_tok not in STOPWORDS_MEDICAS:
+                        query_concept_tokens.add(var_tok)
+                    if var_tok in ALIAS_CLINICOS_MAP:
+                        for alt_tok in ALIAS_CLINICOS_MAP[var_tok].split():
+                            if alt_tok not in STOPWORDS_MEDICAS:
+                                query_concept_tokens.add(alt_tok)
+                if tok in ALIAS_CLINICOS_MAP:
+                    for alt_tok in ALIAS_CLINICOS_MAP[tok].split():
+                        if alt_tok not in STOPWORDS_MEDICAS:
+                            query_concept_tokens.add(alt_tok)
+            if texto_norm in ALIAS_CLINICOS_MAP:
+                for alt_tok in ALIAS_CLINICOS_MAP[texto_norm].split():
+                    if alt_tok not in STOPWORDS_MEDICAS:
+                        query_concept_tokens.add(alt_tok)
+            if _es_consulta_ratio_alb_creat(toks_q):
+                query_concept_tokens.update({
+                    'rac', 'cac', 'albu', 'cre', 'alb', 'creatinina',
+                    'albuminuria', 'orina', 'aislada', 'asilada',
+                })
+            if 'urea' in query_concept_tokens or 'uremia' in query_concept_tokens:
+                query_concept_tokens.update({'urea', 'uremia'})
+
+        multi_concepto_q = len(query_concept_tokens) >= 2
+
+        def _especificidad_candidato(cand_dict: Dict[str, Any]) -> Tuple[int, int, int, int, int]:
+            exact_code = 1 if texto_norm and texto_norm.upper() == str(cand_dict.get('codigo_practica') or '').upper().strip() else 0
+            if not query_concept_tokens:
+                return (exact_code, 1, 0, 0, 0)
+            est_tokens_all = [
+                w for w in re.split(r'[\s/()]+', normalizar_texto_clinico(cand_dict.get('nombre', '')))
+                if w
+            ]
+            est_tokens = [w for w in est_tokens_all if w not in STOPWORDS_MEDICAS]
+            compat_flag = (
+                0
+                if any(w in _CALIFICADORES_DIFERENCIALES and w not in query_concept_tokens for w in est_tokens_all)
+                else 1
+            )
+            concept_hits = sum(1 for w in set(est_tokens) if w in query_concept_tokens)
+            starts_match = 1 if (est_tokens and est_tokens[0] in query_concept_tokens) else 0
+            extra_tokens = sum(1 for w in est_tokens if w not in query_concept_tokens)
+            return (exact_code, compat_flag, concept_hits, starts_match, -extra_tokens)
+
         candidatos = list(candidatos_por_id.values())
+        if multi_concepto_q and not es_renglon_multi_segmento and any(
+            c['similitud_score'] >= 90.0
+            and _especificidad_candidato(c)[1] == 1
+            and _especificidad_candidato(c)[2] >= 2
+            for c in candidatos
+        ):
+            for c_chk in candidatos:
+                esp_chk = _especificidad_candidato(c_chk)
+                if esp_chk[0] == 0 and (esp_chk[1] == 0 or esp_chk[2] == 0):
+                    c_chk['preseleccionado'] = False
+
         candidatos.sort(
             key=lambda c: (
                 1 if c['preseleccionado'] else 0,
                 c['similitud_score'],
+                *_especificidad_candidato(c),
                 c['veces_confirmado'],
                 1 if c['origen_deteccion'] in ('COMBO_RUTINA', 'MEMORIA_APRENDIDA') else 0
             ),
@@ -1126,6 +1655,11 @@ class OCRIntegrationService:
         alternativos = [c for c in candidatos if not c['preseleccionado'] and c['similitud_score'] >= 55.0][:3]
         recomendados = preseleccionados + alternativos
 
+        umbral_sec_base_cv = 24.0
+        umbral_sec_final_cv = 22.0
+        umbral_sec_base_vhash = 55.0
+        umbral_sec_final_vhash = 50.0
+
         # Resolver imágenes históricas de Pasos 1/2 contra RecorteImagenEstudio para habilitar votación Bien/Mal
         if imagenes_secundarias:
             rec_sec_rows = list(
@@ -1137,11 +1671,18 @@ class OCRIntegrationService:
             por_img_sec: Dict[str, Tuple[int, str, str, int, int]] = {}
             for rec_id, fv, img_val, v_pos, v_neg in rec_sec_rows:
                 img_clean = (img_val or '').strip()
-                if not img_clean or img_clean in imagenes_en_trazos or img_clean in por_img_sec:
+                if not img_clean:
+                    continue
+                vp = int(v_pos or 0)
+                vn = int(v_neg or 0)
+                if _es_recorte_negativo_excluido(vp, vn):
+                    imagenes_negativas_excluidas.add(img_clean)
+                    continue
+                if img_clean in imagenes_en_trazos or img_clean in por_img_sec:
                     continue
                 if rec_id in recorte_ids_en_trazos:
                     continue
-                por_img_sec[img_clean] = (rec_id, fv or '', img_clean, int(v_pos or 0), int(v_neg or 0))
+                por_img_sec[img_clean] = (rec_id, fv or '', img_clean, vp, vn)
 
             if por_img_sec:
                 rec_ids_sec = [row[0] for row in por_img_sec.values()]
@@ -1178,29 +1719,24 @@ class OCRIntegrationService:
                         )
                         score_base_sec = round(float(cv_score), 2)
                         sv_sec = float(cv_score) + ajuste_rep
-                        max_sim_neg = _calcular_max_sim_neg(rec_id)
-                        if max_sim_neg >= 78.0:
-                            penalizacion_neg = round(
-                                min(22.0, 8.0 + ((max_sim_neg - 78.0) / 22.0) * 14.0),
-                                2,
-                            )
-                            sv_sec -= penalizacion_neg
+                        max_sim_cv, max_sim_vhash = _calcular_max_sim_neg(rec_id)
+                        sv_sec, _ = _aplicar_penalizacion_negativa(sv_sec, max_sim_cv, max_sim_vhash)
+                        sv_sec = round(max(0.0, min(100.0, sv_sec)), 2)
+                        if score_base_sec < umbral_sec_base_cv or sv_sec < umbral_sec_final_cv:
+                            continue
                     elif firma_norm and fv:
                         v_score = cls.calcular_similitud_visual(firma_norm, fv)
                         score_base_sec = round(float(v_score), 2)
                         sv_sec = float(v_score) + ajuste_rep
-                        max_sim_neg = _calcular_max_sim_neg(rec_id)
-                        if max_sim_neg >= 78.0:
-                            penalizacion_neg = round(
-                                min(22.0, 8.0 + ((max_sim_neg - 78.0) / 22.0) * 14.0),
-                                2,
-                            )
-                            sv_sec -= penalizacion_neg
+                        max_sim_cv, max_sim_vhash = _calcular_max_sim_neg(rec_id)
+                        sv_sec, _ = _aplicar_penalizacion_negativa(sv_sec, max_sim_cv, max_sim_vhash)
+                        sv_sec = round(max(0.0, min(100.0, sv_sec)), 2)
+                        if score_base_sec < umbral_sec_base_vhash or sv_sec < umbral_sec_final_vhash:
+                            continue
                     else:
                         score_base_sec = round(float(score_fallback), 2)
-                        sv_sec = float(score_base_sec) + ajuste_rep
+                        sv_sec = round(max(0.0, min(100.0, float(score_base_sec) + ajuste_rep)), 2)
 
-                    sv_sec = round(max(0.0, min(100.0, sv_sec)), 2)
                     recorte_ids_en_trazos.add(rec_id)
                     imagenes_en_trazos.add(img_sec)
                     trazos_coincidentes.append({
@@ -1217,7 +1753,184 @@ class OCRIntegrationService:
                         'metricas': dict(metricas_sec) if metricas_sec else {},
                     })
 
-                trazos_coincidentes.sort(key=lambda item: item['similitud_score'], reverse=True)
+        # Superficie híbrida de trazos para estudios resueltos por texto (Pasos 2/3) sin trazo aún
+        if (
+            not es_manuscrito_sin_texto
+            and (usando_imagen_real or firma_norm)
+            and recortes_visuales_idx
+        ):
+            estudios_objetivo = [
+                c['id_estudio'] for c in recomendados
+                if c.get('preseleccionado') or c.get('similitud_score', 0.0) >= 86.0
+            ]
+            estudios_ya_con_trazo = {
+                eid
+                for t in trazos_coincidentes
+                for eid in (t.get('estudios_ids') or [])
+            }
+            estudios_sin_trazo = [
+                eid for eid in estudios_objetivo if eid not in estudios_ya_con_trazo
+            ]
+            if estudios_sin_trazo:
+                candidatos_por_est: Dict[int, List[Tuple[int, str, List[int], Any, int, int]]] = {}
+                rec_ids_candidatos: List[int] = []
+                for rec_item in recortes_visuales_idx:
+                    rec_id, fv_cand, _, est_ids = rec_item[:4]
+                    prep_cand = rec_item[4] if len(rec_item) >= 5 else None
+                    v_pos = int(rec_item[5]) if len(rec_item) >= 6 else 0
+                    v_neg = int(rec_item[6]) if len(rec_item) >= 7 else 0
+                    if rec_id in recorte_ids_en_trazos or _es_recorte_negativo_excluido(v_pos, v_neg):
+                        continue
+                    est_ids_validos = [
+                        eid for eid in est_ids
+                        if eid in estudios_por_id and (texto_norm, eid) not in pares_descartados
+                    ]
+                    if not est_ids_validos:
+                        continue
+                    for eid_obj in estudios_sin_trazo:
+                        if eid_obj in est_ids_validos:
+                            candidatos_por_est.setdefault(eid_obj, []).append(
+                                (rec_id, fv_cand, est_ids_validos, prep_cand, v_pos, v_neg)
+                            )
+                            rec_ids_candidatos.append(rec_id)
+
+                if rec_ids_candidatos:
+                    if usando_imagen_real and neg_map:
+                        _asegurar_negativos_hidratados(list(dict.fromkeys(rec_ids_candidatos)))
+
+                    elegidos_surf: List[Tuple[int, float, float, List[int], Dict[str, float]]] = []
+                    elegidos_ids: Set[int] = set()
+                    for eid_obj in estudios_sin_trazo:
+                        if eid_obj in estudios_ya_con_trazo:
+                            continue
+                        evaluados_obj: List[Tuple[float, int, float, float, List[int], Dict[str, float]]] = []
+                        for rec_id, fv_cand, est_ids_val, prep_cand, v_pos, v_neg in candidatos_por_est.get(eid_obj, []):
+                            if rec_id in recorte_ids_en_trazos or rec_id in elegidos_ids:
+                                continue
+                            metricas_s: Dict[str, float] = {}
+                            if usando_imagen_real and query_crop is not None:
+                                if prep_cand is None:
+                                    continue
+                                sc_base, metricas_s = VisualMatcherService.comparar_preparados_detallado(
+                                    query_crop,
+                                    prep_cand,
+                                    pesos=pesos_visuales,
+                                )
+                                if sc_base < umbral_sec_base_cv:
+                                    continue
+                            elif firma_norm and fv_cand:
+                                sc_base = cls.calcular_similitud_visual(firma_norm, fv_cand)
+                                if sc_base < umbral_sec_base_vhash:
+                                    continue
+                            else:
+                                continue
+
+                            score_base_s = round(float(sc_base), 2)
+                            ajuste_rep, _ = cls._calcular_ajuste_reputacion(v_pos, v_neg)
+                            sv_s = float(sc_base) + ajuste_rep
+                            max_sim_cv, max_sim_vhash = _calcular_max_sim_neg(rec_id)
+                            sv_s, _ = _aplicar_penalizacion_negativa(sv_s, max_sim_cv, max_sim_vhash)
+                            sv_s = round(max(0.0, min(100.0, sv_s)), 2)
+
+                            min_final = umbral_sec_final_cv if usando_imagen_real else umbral_sec_final_vhash
+                            if sv_s < min_final:
+                                continue
+
+                            # Preferir recortes específicos de 1 o 2 estudios ante similitudes equivalentes
+                            bonus_especif = 4.0 if len(est_ids_val) == 1 else (2.0 if len(est_ids_val) == 2 else 0.0)
+                            rank_val = sv_s + bonus_especif
+                            evaluados_obj.append((rank_val, rec_id, sv_s, score_base_s, est_ids_val, metricas_s))
+
+                        if evaluados_obj:
+                            evaluados_obj.sort(key=lambda item: (item[0], item[2]), reverse=True)
+                            _, rec_id_w, sv_w, score_base_w, est_ids_w, metricas_w = evaluados_obj[0]
+                            elegidos_ids.add(rec_id_w)
+                            elegidos_surf.append((rec_id_w, sv_w, score_base_w, est_ids_w, metricas_w))
+                            for e_covered in est_ids_w:
+                                estudios_ya_con_trazo.add(e_covered)
+
+                    if elegidos_surf:
+                        imgs_surf = dict(
+                            RecorteImagenEstudio.objects
+                            .filter(id__in=[x[0] for x in elegidos_surf])
+                            .values_list('id', 'imagen_muestra')
+                        )
+                        for rec_id_w, sv_w, score_base_w, est_ids_w, metricas_w in elegidos_surf:
+                            img_w = (imgs_surf.get(rec_id_w) or '').strip()
+                            if img_w in imagenes_en_trazos or img_w in imagenes_negativas_excluidas:
+                                continue
+                            recorte_ids_en_trazos.add(rec_id_w)
+                            if img_w:
+                                imagenes_en_trazos.add(img_w)
+                                _agregar_imagen_muestra(img_w)
+                                if not imagen_muestra_conocida:
+                                    imagen_muestra_conocida = img_w
+                            trazos_coincidentes.append({
+                                'recorte_id': rec_id_w,
+                                'imagen_muestra': img_w,
+                                'estudios_ids': list(est_ids_w),
+                                'estudios_nombres': [
+                                    estudios_por_id[eid].nombre
+                                    for eid in est_ids_w
+                                    if eid in estudios_por_id
+                                ],
+                                'similitud_score': sv_w,
+                                'score_base': score_base_w,
+                                'metricas': dict(metricas_w) if metricas_w else {},
+                            })
+
+        if imagenes_negativas_excluidas:
+            imagenes_muestra_conocidas = [
+                img for img in imagenes_muestra_conocidas
+                if img not in imagenes_negativas_excluidas
+            ]
+            if imagen_muestra_conocida.strip() in imagenes_negativas_excluidas:
+                imagen_muestra_conocida = imagenes_muestra_conocidas[0] if imagenes_muestra_conocidas else ''
+
+        if trazos_coincidentes:
+            trazos_coincidentes.sort(key=lambda item: item['similitud_score'], reverse=True)
+            if (
+                len(trazos_coincidentes) > 6
+                and not es_manuscrito_sin_texto
+                and (mejor_score_trazo < umbral_directo or es_renglon_multi_segmento)
+                and recomendados
+            ):
+                presel_ids = [c['id_estudio'] for c in recomendados if c.get('preseleccionado')]
+                target_ids = presel_ids or [
+                    c['id_estudio'] for c in recomendados if c.get('similitud_score', 0.0) >= 86.0
+                ]
+                elegidos_top6: List[Dict[str, Any]] = []
+                usados_rec_ids: Set[int] = set()
+                for eid_tgt in target_ids:
+                    if len(elegidos_top6) >= 6:
+                        break
+                    if any(eid_tgt in (t.get('estudios_ids') or []) for t in elegidos_top6):
+                        continue
+                    cands_eid = [
+                        t for t in trazos_coincidentes
+                        if t['recorte_id'] not in usados_rec_ids and eid_tgt in (t.get('estudios_ids') or [])
+                    ]
+                    if cands_eid:
+                        # Preferir trazos específicos para el estudio objetivo ante puntajes cercanos
+                        cands_eid.sort(
+                            key=lambda t: (
+                                1 if len(t.get('estudios_ids') or []) == 1 else 0,
+                                t['similitud_score'],
+                            ),
+                            reverse=True,
+                        )
+                        elegidos_top6.append(cands_eid[0])
+                        usados_rec_ids.add(cands_eid[0]['recorte_id'])
+                for t in trazos_coincidentes:
+                    if len(elegidos_top6) >= 6:
+                        break
+                    if t['recorte_id'] not in usados_rec_ids:
+                        elegidos_top6.append(t)
+                        usados_rec_ids.add(t['recorte_id'])
+                elegidos_top6.sort(key=lambda item: item['similitud_score'], reverse=True)
+                trazos_coincidentes = elegidos_top6
+            else:
+                trazos_coincidentes = trazos_coincidentes[:6]
 
         return {
             'indice': indice,
@@ -1256,7 +1969,7 @@ class OCRIntegrationService:
             for patron in patrones_activos:
                 disparadores = [normalizar_texto_clinico(d) for d in (patron.disparadores or [])]
                 coincide = any(
-                    disp in texto or fuzz.token_set_ratio(disp, texto) >= 85
+                    cls._disparador_coincide_texto(disp, texto)
                     for disp in disparadores
                     if len(disp) >= 3
                 )
@@ -2251,16 +2964,51 @@ class OCRIntegrationService:
             int(singleton.total_votos_negativos or 0) + max(0, int(delta_neg or 0)),
         )
 
-        rows = list(
-            FeedbackComparacionTrazo.objects.filter(
-                hog_cos__isnull=False,
-                chamfer_sim__isnull=False,
-                min_zone_chamfer__isnull=False,
-                ncc_sim__isnull=False,
-            )
+        raw_rows = list(
+            FeedbackComparacionTrazo.objects
             .order_by('-fecha_registro', '-id')
-            .values('es_correcto', 'hog_cos', 'chamfer_sim', 'min_zone_chamfer', 'ncc_sim')[:500]
+            .values(
+                'id',
+                'es_correcto',
+                'hog_cos',
+                'chamfer_sim',
+                'min_zone_chamfer',
+                'ncc_sim',
+                'imagen_consulta',
+                'recorte_historico_id',
+                'recorte_historico__firma_visual',
+                'recorte_historico__imagen_muestra',
+            )[:500]
         )
+        rows: List[Dict[str, Any]] = []
+        for r in raw_rows:
+            hog_v = cls._to_finite_float(r.get('hog_cos'))
+            cham_v = cls._to_finite_float(r.get('chamfer_sim'))
+            zone_v = cls._to_finite_float(r.get('min_zone_chamfer'))
+            ncc_v = cls._to_finite_float(r.get('ncc_sim'))
+            if None in (hog_v, cham_v, zone_v, ncc_v):
+                img_q = r.get('imagen_consulta') or ''
+                img_h = r.get('recorte_historico__imagen_muestra') or ''
+                if img_q and img_h and VisualMatcherService.is_available():
+                    qa = VisualMatcherService.preparar_recorte(img_q)
+                    qb = VisualMatcherService.obtener_o_preparar(
+                        ('recorte', r.get('recorte_historico_id'), r.get('recorte_historico__firma_visual') or ''),
+                        img_h,
+                    )
+                    _, m_recomp = VisualMatcherService.comparar_preparados_detallado(qa, qb)
+                    if m_recomp and all(k in m_recomp for k in ('hog_cos', 'chamfer_sim', 'min_zone_chamfer', 'ncc_sim')):
+                        hog_v = float(m_recomp['hog_cos'])
+                        cham_v = float(m_recomp['chamfer_sim'])
+                        zone_v = float(m_recomp['min_zone_chamfer'])
+                        ncc_v = float(m_recomp['ncc_sim'])
+            if None not in (hog_v, cham_v, zone_v, ncc_v):
+                rows.append({
+                    'es_correcto': bool(r['es_correcto']),
+                    'hog_cos': hog_v,
+                    'chamfer_sim': cham_v,
+                    'min_zone_chamfer': zone_v,
+                    'ncc_sim': ncc_v,
+                })
         pos_rows = [r for r in rows if r['es_correcto']]
         neg_rows = [r for r in rows if not r['es_correcto']]
 
@@ -2635,7 +3383,30 @@ class OCRIntegrationService:
                     vistos_ev.add(eid_int)
                     est_conf_eval.append(eid_int)
 
-            metricas_ev = ev.get('metricas') if isinstance(ev.get('metricas'), dict) else {}
+            metricas_ev = dict(ev.get('metricas')) if isinstance(ev.get('metricas'), dict) else {}
+            score_base_ev = cls._to_finite_float(ev.get('score_base'))
+            if (
+                any(
+                    cls._to_finite_float(metricas_ev.get(k)) is None
+                    for k in ('hog_cos', 'chamfer_sim', 'min_zone_chamfer', 'ncc_sim')
+                )
+                and img_consulta
+                and recorte_obj.imagen_muestra
+                and VisualMatcherService.is_available()
+            ):
+                qa_ev = VisualMatcherService.preparar_recorte(img_consulta)
+                qb_ev = VisualMatcherService.obtener_o_preparar(
+                    ('recorte', recorte_obj.id, recorte_obj.firma_visual or ''),
+                    recorte_obj.imagen_muestra,
+                )
+                sc_calc, m_calc = VisualMatcherService.comparar_preparados_detallado(qa_ev, qb_ev)
+                if m_calc:
+                    for k_m, v_m in m_calc.items():
+                        if cls._to_finite_float(metricas_ev.get(k_m)) is None:
+                            metricas_ev[k_m] = v_m
+                    if score_base_ev is None:
+                        score_base_ev = sc_calc
+
             FeedbackComparacionTrazo.objects.create(
                 recorte_historico=recorte_obj,
                 es_correcto=es_correcto,
@@ -2643,7 +3414,7 @@ class OCRIntegrationService:
                 texto_consulta=texto_consulta,
                 imagen_consulta=img_consulta,
                 estudios_confirmados_ids=est_conf_eval,
-                score_base=cls._to_finite_float(ev.get('score_base')),
+                score_base=score_base_ev,
                 hog_cos=cls._to_finite_float(metricas_ev.get('hog_cos')),
                 chamfer_sim=cls._to_finite_float(metricas_ev.get('chamfer_sim')),
                 min_zone_chamfer=cls._to_finite_float(metricas_ev.get('min_zone_chamfer')),

@@ -15,13 +15,19 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 DEFAULT_WEIGHTS: Dict[str, float] = {
-    'hog': 0.25,
-    'chamfer': 0.40,
-    'zonas': 0.15,
-    'ncc': 0.20,
+    'hog': 0.26,
+    'chamfer': 0.36,
+    'zonas': 0.20,
+    'ncc': 0.18,
 }
 MIN_WEIGHT: float = 0.10
-MAX_WEIGHT: float = 0.55
+MAX_WEIGHT: float = 0.50
+MAX_WEIGHT_BY_KEY: Dict[str, float] = {
+    'hog': 0.45,
+    'chamfer': 0.50,
+    'zonas': 0.35,
+    'ncc': 0.25,
+}
 
 logger = logging.getLogger(__name__)
 
@@ -104,19 +110,23 @@ class VisualMatcherService:
     DEFAULT_WEIGHTS: Dict[str, float] = dict(DEFAULT_WEIGHTS)
     MIN_WEIGHT: float = MIN_WEIGHT
     MAX_WEIGHT: float = MAX_WEIGHT
+    MAX_WEIGHT_BY_KEY: Dict[str, float] = dict(MAX_WEIGHT_BY_KEY)
+    AR_DIFF_MAX: float = 0.78
+    CHAMFER_DECAY_SCALE: float = 2.85
     _cache: 'OrderedDict[Tuple[Any, ...], Optional[PreparedVisualCrop]]' = OrderedDict()
     _cache_lock = threading.Lock()
 
     @classmethod
     def normalizar_pesos(cls, pesos: Optional[Dict[str, float]]) -> Dict[str, float]:
         """
-        Normaliza y acota los pesos del comparador visual al rango [MIN_WEIGHT, MAX_WEIGHT]
+        Normaliza y acota los pesos del comparador visual al rango [MIN_WEIGHT, MAX_WEIGHT_BY_KEY[k]]
         garantizando suma exacta igual a 1.0 mediante clamp-normalización iterativa.
         """
         keys = tuple(cls.DEFAULT_WEIGHTS.keys())
         if not isinstance(pesos, dict) or not pesos:
             return dict(cls.DEFAULT_WEIGHTS)
 
+        max_bounds = {k: cls.MAX_WEIGHT_BY_KEY.get(k, cls.MAX_WEIGHT) for k in keys}
         w: Dict[str, float] = {}
         for k in keys:
             raw_val = pesos.get(k, cls.DEFAULT_WEIGHTS[k])
@@ -136,13 +146,13 @@ class VisualMatcherService:
         w = {k: w[k] / total for k in keys}
 
         for _ in range(12):
-            w = {k: max(cls.MIN_WEIGHT, min(cls.MAX_WEIGHT, w[k])) for k in keys}
+            w = {k: max(cls.MIN_WEIGHT, min(max_bounds[k], w[k])) for k in keys}
             s = sum(w.values())
             diff = 1.0 - s
             if abs(diff) <= 1e-12:
                 break
             if diff > 0.0:
-                adjustable = [k for k in keys if w[k] < cls.MAX_WEIGHT - 1e-12]
+                adjustable = [k for k in keys if w[k] < max_bounds[k] - 1e-12]
             else:
                 adjustable = [k for k in keys if w[k] > cls.MIN_WEIGHT + 1e-12]
             if not adjustable:
@@ -160,7 +170,7 @@ class VisualMatcherService:
                     w[k] *= scale
 
         rounded = {
-            k: round(max(cls.MIN_WEIGHT, min(cls.MAX_WEIGHT, w[k])), 6)
+            k: round(max(cls.MIN_WEIGHT, min(max_bounds[k], w[k])), 6)
             for k in keys
         }
         err = round(1.0 - sum(rounded.values()), 6)
@@ -172,7 +182,7 @@ class VisualMatcherService:
             )
             for k in candidates:
                 cand_val = round(rounded[k] + err, 6)
-                if cls.MIN_WEIGHT <= cand_val <= cls.MAX_WEIGHT:
+                if cls.MIN_WEIGHT <= cand_val <= max_bounds[k]:
                     rounded[k] = cand_val
                     break
         return rounded
@@ -243,6 +253,122 @@ class VisualMatcherService:
         except Exception:
             return b''
 
+    @staticmethod
+    def _recortar_marco_oscuro_perimetral(img: Any) -> Any:
+        """
+        Retira artefactos de borde oscuro perimetral de 1-2 px (p. ej. marcos de recorte/escáner)
+        sólo cuando la línea externa es continua y oscura en casi toda la arista (incluidos extremos)
+        y está separada de la tinta interior por un margen claro limpio. Preserva trazos reales
+        que tocan el borde de un recorte ajustado.
+        """
+        h, w = img.shape
+
+        def _es_borde(strips: List[Any], gap: Any) -> bool:
+            for s in strips:
+                if len(s) < 6:
+                    return False
+                if float(np.mean(s < 215)) < 0.85 or float(np.median(s)) >= 190.0:
+                    return False
+                end_n = min(3, len(s))
+                if (
+                    float(np.mean(s[:end_n] < 215)) < 0.66
+                    or float(np.mean(s[-end_n:] < 215)) < 0.66
+                ):
+                    return False
+            b_med = float(np.median(strips[-1]))
+            thresh_gap = max(120.0, b_med + 45.0)
+            return (
+                float(np.mean(gap >= thresh_gap)) >= 0.72
+                and float(np.median(gap)) >= (b_med + 50.0)
+            )
+
+        top_cut = 0
+        bot_cut = 0
+        left_cut = 0
+        right_cut = 0
+
+        for k in (2, 1):
+            if h - k >= 6 and _es_borde([img[i, :] for i in range(k)], img[k, :]):
+                top_cut = k
+                break
+        for k in (2, 1):
+            if h - top_cut - k >= 6 and _es_borde(
+                [img[h - 1 - i, :] for i in range(k)], img[h - 1 - k, :]
+            ):
+                bot_cut = k
+                break
+        for k in (2, 1):
+            if w - k >= 8 and _es_borde([img[:, i] for i in range(k)], img[:, k]):
+                left_cut = k
+                break
+        for k in (2, 1):
+            if w - left_cut - k >= 8 and _es_borde(
+                [img[:, w - 1 - i] for i in range(k)], img[:, w - 1 - k]
+            ):
+                right_cut = k
+                break
+
+        if top_cut or bot_cut or left_cut or right_cut:
+            return img[top_cut:h - bot_cut, left_cut:w - right_cut]
+        return img
+
+    @staticmethod
+    def _limpiar_intrusos_verticales(inv: Any) -> Any:
+        """
+        Elimina trazos intrusos de renglones vecinos superiores o inferiores que invaden el recorte
+        (componentes desconectados pegados al borde superior/inferior o separados por un valle
+        horizontal sin tinta en los tercios externos), preservando el cuerpo central de la palabra.
+        """
+        h, w = inv.shape
+        if h < 18 or w < 16:
+            return inv
+
+        total_area = int(np.count_nonzero(inv))
+        if total_area < 20:
+            return inv
+
+        out = inv.copy()
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(out, connectivity=8)
+        if num_labels <= 2:
+            return inv
+
+        top_limit = int(round(h * 0.38))
+        bot_limit = int(round(h * 0.62))
+        removed_any = False
+
+        for lbl in range(1, num_labels):
+            x, y, cw, ch, area = stats[lbl]
+            cy = float(centroids[lbl][1])
+            touches_top = (y <= 2 and (y + ch) <= top_limit and cy < h * 0.28)
+            touches_bot = ((y + ch) >= (h - 2) and y >= bot_limit and cy > h * 0.72)
+            if (touches_top or touches_bot) and area < total_area * 0.45:
+                out[labels == lbl] = 0
+                removed_any = True
+
+        row_ink = np.count_nonzero(out, axis=1)
+        for y_val in range(top_limit, 2, -1):
+            if row_ink[y_val] == 0:
+                top_ink = int(np.count_nonzero(out[:y_val, :]))
+                rem_ink = int(np.count_nonzero(out[y_val:, :]))
+                if 0 < top_ink < rem_ink * 0.55 and rem_ink >= 20:
+                    out[:y_val, :] = 0
+                    removed_any = True
+                    break
+
+        row_ink = np.count_nonzero(out, axis=1)
+        for y_val in range(bot_limit, h - 2):
+            if row_ink[y_val] == 0:
+                bot_ink = int(np.count_nonzero(out[y_val + 1:, :]))
+                rem_ink = int(np.count_nonzero(out[:y_val + 1, :]))
+                if 0 < bot_ink < rem_ink * 0.55 and rem_ink >= 20:
+                    out[y_val + 1:, :] = 0
+                    removed_any = True
+                    break
+
+        if removed_any and int(np.count_nonzero(out)) >= 12:
+            return out
+        return inv
+
     @classmethod
     def preparar_recorte(cls, data_url: str) -> Optional[PreparedVisualCrop]:
         """
@@ -270,10 +396,87 @@ class VisualMatcherService:
         if (int(img.max()) - int(img.min())) < 25 or float(img.std()) < 8.0:
             return None
 
-        _, inv = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        stripped = cls._recortar_marco_oscuro_perimetral(img)
+        if (
+            stripped.shape[0] >= 6
+            and stripped.shape[1] >= 8
+            and (int(stripped.max()) - int(stripped.min())) >= 25
+            and float(stripped.std()) >= 8.0
+        ):
+            img = stripped
+
+        # Recortar márgenes blancos uniformes externos (>= 245) para invariancia ante padding
+        nonwhite = np.where(img < 245)
+        if len(nonwhite[0]) >= 12:
+            y0 = max(0, int(nonwhite[0].min()) - 1)
+            y1 = min(img.shape[0], int(nonwhite[0].max()) + 2)
+            x0 = max(0, int(nonwhite[1].min()) - 1)
+            x1 = min(img.shape[1], int(nonwhite[1].max()) + 2)
+            trimmed = img[y0:y1, x0:x1]
+            if (
+                trimmed.shape[0] >= 6
+                and trimmed.shape[1] >= 8
+                and (int(trimmed.max()) - int(trimmed.min())) >= 25
+                and float(trimmed.std()) >= 8.0
+            ):
+                img = trimmed
+
+        t_otsu, inv = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
         total_px = int(inv.shape[0] * inv.shape[1])
         ink_px = int(np.count_nonzero(inv))
+        ink_frac = ink_px / float(total_px) if total_px > 0 else 0.0
+
+        # Distinguir papel blanco uniforme (aun con trazos gruesos) de fondos con sombras o pliegues
+        paper_px = img[inv == 0]
+        paper_p10 = float(np.percentile(paper_px, 10)) if paper_px.size > 0 else 255.0
+        h_i, w_i = img.shape
+        horiz_thirds_p90 = (
+            [float(np.percentile(img[:, i * w_i // 3:(i + 1) * w_i // 3], 90)) for i in range(3)]
+            if w_i >= 6
+            else [float(np.percentile(img, 90))]
+        )
+        vert_thirds_p90 = (
+            [float(np.percentile(img[i * h_i // 3:(i + 1) * h_i // 3, :], 90)) for i in range(3)]
+            if h_i >= 6
+            else [float(np.percentile(img, 90))]
+        )
+        horiz_paper = [v for v in horiz_thirds_p90 if v >= 100.0]
+        vert_paper = [v for v in vert_thirds_p90 if v >= 100.0]
+        horiz_spread = (max(horiz_paper) - min(horiz_paper)) if len(horiz_paper) >= 2 else 0.0
+        vert_spread = (max(vert_paper) - min(vert_paper)) if len(vert_paper) >= 2 else 0.0
+        thirds_spread = max(horiz_spread, vert_spread)
+        is_clean_white = float(np.percentile(img, 90)) >= 242.0 and thirds_spread < 22.0
+
+        if is_clean_white:
+            if t_otsu > 200 and float(img.std()) >= 16.0 and int(img.min()) < 90:
+                _, inv_adj = cv2.threshold(img, 200.0, 255, cv2.THRESH_BINARY_INV)
+                if int(np.count_nonzero(inv_adj)) >= 12:
+                    inv = inv_adj
+                    ink_px = int(np.count_nonzero(inv))
+        elif ink_frac > 0.30 or paper_p10 < 215.0 or thirds_spread >= 22.0:
+            kw = min(25, max(5, (w_i // 2) | 1))
+            kh = min(25, max(5, (h_i // 2) | 1))
+            bg_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kw, kh))
+            bg = cv2.morphologyEx(img, cv2.MORPH_CLOSE, bg_k, borderType=cv2.BORDER_REPLICATE)
+            norm = cv2.divide(img, np.maximum(bg, 1), scale=255)
+            if (int(norm.max()) - int(norm.min())) >= 25 and float(norm.std()) >= 8.0:
+                t_norm, inv_norm = cv2.threshold(norm, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+                if t_norm > 200 and float(norm.std()) >= 16.0 and int(norm.min()) < 90:
+                    _, inv_norm = cv2.threshold(norm, 200.0, 255, cv2.THRESH_BINARY_INV)
+                elif t_norm > 225 and int(norm.min()) < 180:
+                    _, inv_norm = cv2.threshold(norm, 222.0, 255, cv2.THRESH_BINARY_INV)
+                norm_ink = int(np.count_nonzero(inv_norm))
+                norm_frac = norm_ink / float(total_px)
+                if norm_ink >= 12 and 0.005 <= norm_frac <= 0.55:
+                    inv = inv_norm
+                    ink_px = norm_ink
+
         if ink_px < 12 or total_px <= 0 or (ink_px / float(total_px)) > 0.75:
+            return None
+
+        inv = cls._limpiar_intrusos_verticales(inv)
+        ink_px = int(np.count_nonzero(inv))
+        if ink_px < 12:
             return None
 
         coords = cv2.findNonZero(inv)
@@ -289,7 +492,7 @@ class VisualMatcherService:
 
         ar = w / float(h)
 
-        # Lienzo proporcional centrado de 32x96 para el descriptor HOG
+        # Lienzo proporcional centrado de 32x96 para el descriptor HOG tolerante a grosor de trazo
         scale = min(28.0 / float(h), 92.0 / float(w))
         nw = max(1, int(round(w * scale)))
         nh = max(1, int(round(h * scale)))
@@ -301,7 +504,7 @@ class VisualMatcherService:
         oy = (32 - nh) // 2
         canvas[oy:oy + nh, ox:ox + nw] = resized
 
-        blur = cv2.GaussianBlur(canvas, (3, 3), 0.7)
+        blur = cv2.GaussianBlur(canvas, (3, 3), 0.9)
         hog_vec = _compute_hog_sobel(blur)
 
         # Máscara binaria normalizada a altura 32 manteniendo proporción (ancho acotado 16..128)
@@ -334,8 +537,8 @@ class VisualMatcherService:
     ) -> Tuple[float, Dict[str, float]]:
         """
         Compara dos recortes preparados devolviendo (similitud [0.0, 100.0], metricas).
-        Combina compuerta de relación de aspecto, HOG Coseno, alineación NCC,
-        Chamfer Distance simétrico y consistencia en 3 tercios horizontales.
+        Combina compuerta de relación de aspecto, HOG Coseno, alineación NCC suavizada,
+        Chamfer Distance simétrico tolerante y consistencia zonal en 3 tercios horizontales.
         """
         if not cls.is_available() or crop_a is None or crop_b is None:
             return 0.0, {}
@@ -345,17 +548,11 @@ class VisualMatcherService:
         max_ar = max(ar_a, ar_b)
         if max_ar <= 0.0:
             return 0.0, {}
-
-        ar_diff = abs(ar_a - ar_b) / max_ar
-        if ar_diff > 0.35:
+        if crop_a.hog_vec.shape != crop_b.hog_vec.shape:
             return 0.0, {}
 
+        ar_diff = abs(ar_a - ar_b) / max_ar
         hog_cos = max(0.0, min(1.0, float(np.dot(crop_a.hog_vec, crop_b.hog_vec))))
-        if hog_cos < 0.45:
-            return round(hog_cos * 55.0, 2), {
-                'hog_cos': round(hog_cos, 4),
-                'ar_diff': round(ar_diff, 4),
-            }
 
         tw = int(np.clip(round(32.0 * (ar_a + ar_b) * 0.5), 18, 128))
         mask_a = cv2.resize(crop_a.binary_mask, (tw, 32), interpolation=cv2.INTER_AREA)
@@ -366,7 +563,7 @@ class VisualMatcherService:
         if not np.any(a > 0) or not np.any(b > 0):
             return 0.0, {}
 
-        pad = 4
+        pad = 6
         b_pad = cv2.copyMakeBorder(b, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=0)
         res = cv2.matchTemplate(b_pad, a, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
@@ -378,7 +575,7 @@ class VisualMatcherService:
         d_ab = float(dt_b[a > 0].mean()) if np.any(a > 0) else 20.0
         d_ba = float(dt_a[b_al > 0].mean()) if np.any(b_al > 0) else 20.0
         cd = 0.5 * (d_ab + d_ba)
-        chamfer_sim = float(np.exp(-cd / 2.2))
+        chamfer_sim = float(np.exp(-cd / cls.CHAMFER_DECAY_SCALE))
 
         third = max(1, tw // 3)
         zone_sims: List[float] = []
@@ -395,16 +592,26 @@ class VisualMatcherService:
             if not has_za and not has_zb:
                 zone_sims.append(1.0)
             elif not has_za or not has_zb:
-                zone_sims.append(0.1)
+                zone_sims.append(0.18)
             else:
                 z_dab = float(dt_b[:, x0:x1][za > 0].mean())
                 z_dba = float(dt_a[:, x0:x1][zb > 0].mean())
-                zone_sims.append(float(np.exp(-0.5 * (z_dab + z_dba) / 2.2)))
+                zone_sims.append(float(np.exp(-0.5 * (z_dab + z_dba) / cls.CHAMFER_DECAY_SCALE)))
 
-        min_zone_chamfer = min(zone_sims)
+        min_zone_chamfer = 0.30 * (sum(zone_sims) / float(len(zone_sims))) + 0.70 * min(zone_sims)
         ncc_sim = max(0.0, float(max_val))
-        ar_pen = max(0.0, (ar_diff - 0.15) * 0.45)
+        metricas = {
+            'hog_cos': round(hog_cos, 4),
+            'chamfer_sim': round(chamfer_sim, 4),
+            'min_zone_chamfer': round(min_zone_chamfer, 4),
+            'ncc_sim': round(ncc_sim, 4),
+            'ar_diff': round(ar_diff, 4),
+        }
 
+        if ar_diff > cls.AR_DIFF_MAX:
+            return 0.0, metricas
+
+        ar_pen = max(0.0, (ar_diff - 0.20) * 0.30)
         w = cls.normalizar_pesos(pesos)
         raw = (
             w['hog'] * hog_cos
@@ -413,17 +620,8 @@ class VisualMatcherService:
             + w['ncc'] * ncc_sim
             - ar_pen
         )
-        if ncc_sim < 0.45:
-            raw *= (0.75 + 0.25 * (ncc_sim / 0.45))
 
         score = round(max(0.0, min(1.0, raw)) * 100.0, 2)
-        metricas = {
-            'hog_cos': round(hog_cos, 4),
-            'chamfer_sim': round(chamfer_sim, 4),
-            'min_zone_chamfer': round(min_zone_chamfer, 4),
-            'ncc_sim': round(ncc_sim, 4),
-            'ar_diff': round(ar_diff, 4),
-        }
         return score, metricas
 
     @classmethod
@@ -444,8 +642,8 @@ class VisualMatcherService:
         cls,
         query_crop: Optional[PreparedVisualCrop],
         candidatos: List[Tuple[int, PreparedVisualCrop]],
-        top_k_stage1: int = 25,
-        min_hog_stage1: float = 0.50,
+        top_k_stage1: int = 60,
+        min_hog_stage1: float = 0.32,
         pesos: Optional[Dict[str, float]] = None,
     ) -> Dict[int, Tuple[float, Dict[str, float]]]:
         """
@@ -467,7 +665,7 @@ class VisualMatcherService:
             max_ar = max(q_ar, cand_crop.aspect_ratio)
             if max_ar <= 0.0:
                 continue
-            if abs(q_ar - cand_crop.aspect_ratio) / max_ar > 0.35:
+            if abs(q_ar - cand_crop.aspect_ratio) / max_ar > cls.AR_DIFF_MAX:
                 continue
             if cand_crop.hog_vec.shape != q_vec.shape:
                 continue
@@ -509,8 +707,8 @@ class VisualMatcherService:
         cls,
         query_crop: Optional[PreparedVisualCrop],
         candidatos: List[Tuple[int, PreparedVisualCrop]],
-        top_k_stage1: int = 15,
-        min_hog_stage1: float = 0.50,
+        top_k_stage1: int = 30,
+        min_hog_stage1: float = 0.32,
         pesos: Optional[Dict[str, float]] = None,
     ) -> Dict[int, float]:
         """
