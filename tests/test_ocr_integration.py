@@ -12,6 +12,7 @@ from rest_framework.test import APIClient
 from rest_framework import status
 
 from app.models.user import Personal, RolPersonal
+from app.models.audit import EventoAuditoria, AccionAuditoria
 from app.models.studies import (
     Estudios,
     TipoMuestra,
@@ -19,7 +20,9 @@ from app.models.studies import (
     PerfilEstudioPatron,
     CoocurrenciaEstudio,
     RecorteImagenEstudio,
-    RecorteEstudio
+    RecorteEstudio,
+    FeedbackComparacionTrazo,
+    CalibracionComparadorVisual,
 )
 from app.services.ocr_service import OCRIntegrationService
 from app.services.ocr_visual_matcher import VisualMatcherService
@@ -935,6 +938,594 @@ class OCRIntegrationTestCase(TestCase):
         self.assertEqual(data['renglones'][0]['recomendados'][0]['id_estudio'], self.estudio_glucemia.id)
         self.assertIn(crop_gluc_base, data['renglones'][0]['imagenes_muestra_conocidas'])
         self.assertEqual(data['renglones'][1]['recomendados'], [])
+
+    def _crear_cliente_ocr(self, email='admision_trazos@hospital.local', dni=99112233):
+        user = Personal.objects.create_user(
+            email=email,
+            password='Password123!',
+            nombre='Lucia',
+            apellidos='Mendez',
+            dni=dni,
+            rol=RolPersonal.ADMISION,
+        )
+        client = APIClient()
+        client.force_authenticate(user=user)
+        return client
+
+    def test_trazos_coincidentes_solo_recortes_historicos_y_metricas(self):
+        """Valida que trazos_coincidentes incluya únicamente RecorteImagenEstudio del Paso 0 (nunca alias/combos)."""
+        VisualMatcherService.limpiar_cache()
+        client = self._crear_cliente_ocr(email='trazos_solo@hospital.local', dni=99110001)
+
+        crop_orina_alias = self._build_handwritten_webp('Orina Completa', thickness=2, scale=1.0)
+        crop_combo = self._build_handwritten_webp('Perfil Renal', thickness=2, scale=1.0)
+        EstudioAliasAprendido.objects.create(
+            texto_patron='orina alias especial',
+            estudio=self.estudio_orina,
+            veces_confirmado=2,
+            confianza_score=100.0,
+            estado_revision='APROBADO_AUTOMATICO',
+            imagen_muestra=crop_orina_alias,
+        )
+        PerfilEstudioPatron.objects.create(
+            nombre_perfil='Combo Renal Especial',
+            disparadores=['perfil renal especial'],
+            estudios_ids=[self.estudio_glucemia.id, self.estudio_orina.id],
+            activo=True,
+            imagen_muestra=crop_combo,
+        )
+
+        vhash_1 = '101010101010101020aaaa'
+        vhash_2 = '101010101010101020bbbb'
+        crop_hemo_1 = self._build_handwritten_webp('Hemograma', thickness=2, scale=1.0, vhash=vhash_1)
+        crop_hemo_2 = self._build_handwritten_webp('Hemograma', thickness=3, scale=1.02, tilt=0.02, vhash=vhash_2)
+        crop_hemo_query = self._build_handwritten_webp('Hemograma', thickness=2, scale=1.03, tilt=0.04, sx=1.03)
+        crop_descarte = self._build_handwritten_webp('Firma Dr Perez', thickness=2, scale=1.0)
+
+        fb_resp = client.post(
+            '/app/ocr/retroalimentar/',
+            {
+                'renglones_confirmados': [
+                    {
+                        'texto': '[Manuscrito a revisar]',
+                        'estudios_ids': [self.estudio_hemo.id],
+                        'imagen_muestra': crop_hemo_1,
+                    },
+                    {
+                        'texto': '[Manuscrito a revisar]',
+                        'estudios_ids': [self.estudio_hemo.id],
+                        'imagen_muestra': crop_hemo_2,
+                    },
+                ],
+                'recortes_descartados': [
+                    {'texto': 'Firma Dr Perez', 'imagen_muestra': crop_descarte},
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(fb_resp.status_code, status.HTTP_200_OK)
+
+        recortes_validos = list(RecorteImagenEstudio.objects.filter(es_descarte=False).order_by('id'))
+        self.assertEqual(len(recortes_validos), 2)
+        rec_ids_esperados = {r.id for r in recortes_validos}
+
+        scan_resp = client.post(
+            '/app/ocr/escanear-receta/',
+            {
+                'textos': [
+                    '[Manuscrito a revisar]',
+                    'orina alias especial',
+                    'perfil renal especial',
+                    '[Manuscrito a revisar]',
+                ],
+                'firmas_visuales': ['', '', '', ''],
+                'recortes_imagen': [
+                    crop_hemo_query,
+                    crop_orina_alias,
+                    crop_combo,
+                    crop_descarte,
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(scan_resp.status_code, status.HTTP_200_OK)
+        renglones = scan_resp.json()['renglones']
+        self.assertEqual(len(renglones), 4)
+
+        # Renglón 0: solo los 2 RecorteImagenEstudio reales, ordenados por similitud_score desc, sin truncar
+        trazos_0 = renglones[0]['trazos_coincidentes']
+        self.assertEqual(len(trazos_0), 2)
+        self.assertEqual({t['recorte_id'] for t in trazos_0}, rec_ids_esperados)
+        self.assertGreaterEqual(trazos_0[0]['similitud_score'], trazos_0[1]['similitud_score'])
+        for trazo in trazos_0:
+            self.assertIn(trazo['imagen_muestra'], {crop_hemo_1, crop_hemo_2})
+            self.assertNotIn(trazo['imagen_muestra'], {crop_orina_alias, crop_combo})
+            self.assertEqual(trazo['estudios_ids'], [self.estudio_hemo.id])
+            self.assertEqual(trazo['estudios_nombres'], [self.estudio_hemo.nombre])
+            self.assertIsInstance(trazo['similitud_score'], float)
+            self.assertIsInstance(trazo['score_base'], float)
+            self.assertIsInstance(trazo['metricas'], dict)
+            for metric_key in ('hog_cos', 'chamfer_sim', 'min_zone_chamfer', 'ncc_sim', 'ar_diff'):
+                self.assertIn(metric_key, trazo['metricas'])
+                self.assertIsInstance(trazo['metricas'][metric_key], float)
+
+        # Renglón 1 (solo alias) y Renglón 2 (solo combo): trazos_coincidentes debe estar vacío
+        self.assertFalse(renglones[1]['es_ruido_aprendido'])
+        self.assertEqual(renglones[1]['trazos_coincidentes'], [])
+        self.assertIn(crop_orina_alias, renglones[1]['imagenes_muestra_conocidas'])
+
+        self.assertFalse(renglones[2]['es_ruido_aprendido'])
+        self.assertEqual(renglones[2]['trazos_coincidentes'], [])
+
+        # Renglón 3 (ruido descartado): es_ruido_aprendido=True y trazos_coincidentes=[]
+        self.assertTrue(renglones[3]['es_ruido_aprendido'])
+        self.assertEqual(renglones[3]['trazos_coincidentes'], [])
+
+        # Fallback por vhash sin OpenCV (sin recortes_imagen): metricas debe ser {}
+        scan_vhash = client.post(
+            '/app/ocr/escanear-receta/',
+            {
+                'textos': ['[Manuscrito a revisar]'],
+                'firmas_visuales': [vhash_1],
+            },
+            format='json',
+        )
+        self.assertEqual(scan_vhash.status_code, status.HTTP_200_OK)
+        trazos_vhash = scan_vhash.json()['renglones'][0]['trazos_coincidentes']
+        self.assertGreaterEqual(len(trazos_vhash), 1)
+        for trazo in trazos_vhash:
+            self.assertEqual(trazo['metricas'], {})
+
+    def test_reputacion_progresiva_bien_y_mal_sin_desactivar_recorte(self):
+        """Valida reputación progresiva (+/-) y que muchos votos Mal nunca desactiven el recorte."""
+        VisualMatcherService.limpiar_cache()
+        client = self._crear_cliente_ocr(email='rep_prog@hospital.local', dni=99110002)
+
+        crop_hemo_base = self._build_handwritten_webp('Hemograma', thickness=2, scale=1.0)
+        crop_hemo_probe = self._build_handwritten_webp('Hemograma', thickness=3, scale=1.04, tilt=0.04, sx=1.03)
+        crop_gluc_base = self._build_handwritten_webp('Glucemia', thickness=2, scale=1.0)
+        crop_gluc_probe = self._build_handwritten_webp('Glucemia', thickness=3, scale=1.04, tilt=0.05, sx=1.04)
+
+        client.post(
+            '/app/ocr/retroalimentar/',
+            {
+                'renglones_confirmados': [
+                    {
+                        'texto': '[Manuscrito a revisar]',
+                        'estudios_ids': [self.estudio_hemo.id],
+                        'imagen_muestra': crop_hemo_base,
+                    },
+                    {
+                        'texto': '[Manuscrito a revisar]',
+                        'estudios_ids': [self.estudio_glucemia.id],
+                        'imagen_muestra': crop_gluc_base,
+                    },
+                ]
+            },
+            format='json',
+        )
+
+        rec_hemo = RecorteImagenEstudio.objects.get(imagen_muestra=crop_hemo_base)
+        rec_gluc = RecorteImagenEstudio.objects.get(imagen_muestra=crop_gluc_base)
+
+        def _scan_score(crop_query, rec_id):
+            resp = client.post(
+                '/app/ocr/escanear-receta/',
+                {
+                    'textos': ['[Manuscrito a revisar]'],
+                    'firmas_visuales': [''],
+                    'recortes_imagen': [crop_query],
+                },
+                format='json',
+            )
+            self.assertEqual(resp.status_code, status.HTTP_200_OK)
+            trazos = resp.json()['renglones'][0]['trazos_coincidentes']
+            match = next((t for t in trazos if t['recorte_id'] == rec_id), None)
+            return match
+
+        # 1. Baseline y caída progresiva al votar Mal (sin imagen_consulta para aislar reputación pura)
+        trazo_h0 = _scan_score(crop_hemo_probe, rec_hemo.id)
+        self.assertIsNotNone(trazo_h0)
+        score_h0 = trazo_h0['similitud_score']
+
+        fb_mal_1 = client.post(
+            '/app/ocr/retroalimentar/',
+            {
+                'evaluaciones_trazos': [
+                    {
+                        'recorte_id': rec_hemo.id,
+                        'es_correcto': False,
+                        'texto_consulta': '[Manuscrito a revisar]',
+                        'imagen_consulta': '',
+                    }
+                ]
+            },
+            format='json',
+        )
+        self.assertEqual(fb_mal_1.status_code, status.HTTP_200_OK)
+        self.assertEqual(fb_mal_1.json()['trazos_evaluados_mal'], 1)
+        self.assertEqual(fb_mal_1.json()['trazos_evaluados_bien'], 0)
+        rec_hemo.refresh_from_db()
+        self.assertEqual(rec_hemo.votos_negativos, 1)
+        self.assertFalse(rec_hemo.es_descarte)
+
+        trazo_h1 = _scan_score(crop_hemo_probe, rec_hemo.id)
+        self.assertIsNotNone(trazo_h1)
+        score_h1 = trazo_h1['similitud_score']
+        self.assertLess(score_h1, score_h0)
+
+        # Votar Mal 3 veces más (total 4 votos negativos) -> baja aún más
+        fb_mal_3 = client.post(
+            '/app/ocr/retroalimentar/',
+            {
+                'evaluaciones_trazos': [
+                    {'recorte_id': rec_hemo.id, 'es_correcto': False, 'imagen_consulta': ''}
+                    for _ in range(3)
+                ]
+            },
+            format='json',
+        )
+        self.assertEqual(fb_mal_3.status_code, status.HTTP_200_OK)
+        self.assertEqual(fb_mal_3.json()['trazos_evaluados_mal'], 3)
+        rec_hemo.refresh_from_db()
+        self.assertEqual(rec_hemo.votos_negativos, 4)
+        self.assertFalse(rec_hemo.es_descarte)
+
+        trazo_h4 = _scan_score(crop_hemo_probe, rec_hemo.id)
+        self.assertIsNotNone(trazo_h4)
+        self.assertLess(trazo_h4['similitud_score'], score_h1)
+
+        # Muchos votos Mal adicionales (total 15) -> JAMÁS es_descarte=True ni desactivado
+        fb_mal_11 = client.post(
+            '/app/ocr/retroalimentar/',
+            {
+                'evaluaciones_trazos': [
+                    {'recorte_id': rec_hemo.id, 'es_correcto': False, 'imagen_consulta': ''}
+                    for _ in range(11)
+                ]
+            },
+            format='json',
+        )
+        self.assertEqual(fb_mal_11.status_code, status.HTTP_200_OK)
+        rec_hemo.refresh_from_db()
+        self.assertEqual(rec_hemo.votos_negativos, 15)
+        self.assertFalse(rec_hemo.es_descarte)
+
+        # Sigue activo para su propio trazo genuino
+        trazo_h_base = _scan_score(crop_hemo_base, rec_hemo.id)
+        self.assertIsNotNone(trazo_h_base)
+        self.assertGreaterEqual(trazo_h_base['similitud_score'], 80.0)
+
+        # 2. Subida progresiva al votar Bien sobre Glucemia
+        trazo_g0 = _scan_score(crop_gluc_probe, rec_gluc.id)
+        self.assertIsNotNone(trazo_g0)
+        score_g0 = trazo_g0['similitud_score']
+        self.assertLess(score_g0, 98.0)
+
+        fb_bien_1 = client.post(
+            '/app/ocr/retroalimentar/',
+            {
+                'evaluaciones_trazos': [
+                    {'recorte_id': rec_gluc.id, 'es_correcto': True, 'imagen_consulta': ''}
+                ]
+            },
+            format='json',
+        )
+        self.assertEqual(fb_bien_1.status_code, status.HTTP_200_OK)
+        self.assertEqual(fb_bien_1.json()['trazos_evaluados_bien'], 1)
+        rec_gluc.refresh_from_db()
+        self.assertEqual(rec_gluc.votos_positivos, 1)
+
+        trazo_g1 = _scan_score(crop_gluc_probe, rec_gluc.id)
+        self.assertIsNotNone(trazo_g1)
+        score_g1 = trazo_g1['similitud_score']
+        self.assertGreater(score_g1, score_g0)
+
+        client.post(
+            '/app/ocr/retroalimentar/',
+            {
+                'evaluaciones_trazos': [
+                    {'recorte_id': rec_gluc.id, 'es_correcto': True, 'imagen_consulta': ''}
+                    for _ in range(4)
+                ]
+            },
+            format='json',
+        )
+        rec_gluc.refresh_from_db()
+        self.assertEqual(rec_gluc.votos_positivos, 5)
+
+        trazo_g5 = _scan_score(crop_gluc_probe, rec_gluc.id)
+        self.assertIsNotNone(trazo_g5)
+        self.assertGreater(trazo_g5['similitud_score'], score_g1)
+
+    def test_penalizacion_par_negativo_especifico_preserva_trazo_genuino(self):
+        """Valida que marcar Mal un par (H, Q) penalice fuertemente Q' similar a Q, preservando el trazo genuino de H."""
+        VisualMatcherService.limpiar_cache()
+        client = self._crear_cliente_ocr(email='par_neg@hospital.local', dni=99110003)
+
+        crop_h = self._build_handwritten_webp('Hemograma', thickness=2, scale=1.0)
+        # Q coincide inicialmente cerca del borde (~87%) para que Q' sufra caída por par negativo
+        # mientras que crop_h genuino (score_base=100) siga superando el umbral.
+        crop_q = self._build_handwritten_webp('Hemograma', thickness=3, scale=1.05, tilt=0.28, sx=1.12)
+        crop_q_prime = self._build_handwritten_webp('Hemograma', thickness=3, scale=1.05, tilt=0.285, sx=1.12)
+
+        client.post(
+            '/app/ocr/retroalimentar/',
+            {
+                'renglones_confirmados': [
+                    {
+                        'texto': '[Manuscrito a revisar]',
+                        'estudios_ids': [self.estudio_hemo.id],
+                        'imagen_muestra': crop_h,
+                    }
+                ]
+            },
+            format='json',
+        )
+        rec_h = RecorteImagenEstudio.objects.get(imagen_muestra=crop_h)
+
+        # Escaneo previo de Q: H coincide inicialmente
+        scan_q_before = client.post(
+            '/app/ocr/escanear-receta/',
+            {
+                'textos': ['[Manuscrito a revisar]'],
+                'firmas_visuales': [''],
+                'recortes_imagen': [crop_q],
+            },
+            format='json',
+        )
+        self.assertEqual(scan_q_before.status_code, status.HTTP_200_OK)
+        trazos_q_before = scan_q_before.json()['renglones'][0]['trazos_coincidentes']
+        self.assertEqual(len(trazos_q_before), 1)
+        score_antes = trazos_q_before[0]['similitud_score']
+
+        # Marcar Mal el par (H, Q)
+        fb_mal = client.post(
+            '/app/ocr/retroalimentar/',
+            {
+                'evaluaciones_trazos': [
+                    {
+                        'recorte_id': rec_h.id,
+                        'es_correcto': False,
+                        'texto_consulta': '[Manuscrito a revisar]',
+                        'firma_visual_consulta': '',
+                        'imagen_consulta': crop_q,
+                        'estudios_confirmados_ids': [],
+                        'score_base': trazos_q_before[0]['score_base'],
+                        'metricas': trazos_q_before[0]['metricas'],
+                    }
+                ]
+            },
+            format='json',
+        )
+        self.assertEqual(fb_mal.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            FeedbackComparacionTrazo.objects.filter(recorte_historico=rec_h, es_correcto=False).count(),
+            1
+        )
+
+        # Re-escanear Q': debe quedar fuertemente penalizado (no alcanza umbral >= 80)
+        scan_q_prime = client.post(
+            '/app/ocr/escanear-receta/',
+            {
+                'textos': ['[Manuscrito a revisar]'],
+                'firmas_visuales': [''],
+                'recortes_imagen': [crop_q_prime],
+            },
+            format='json',
+        )
+        self.assertEqual(scan_q_prime.status_code, status.HTTP_200_OK)
+        renglon_q_prime = scan_q_prime.json()['renglones'][0]
+        match_q_prime = next(
+            (t for t in renglon_q_prime['trazos_coincidentes'] if t['recorte_id'] == rec_h.id),
+            None
+        )
+        if match_q_prime is not None:
+            self.assertLess(match_q_prime['similitud_score'], score_antes - 15.0)
+        else:
+            self.assertEqual(renglon_q_prime['trazos_coincidentes'], [])
+
+        # Escanear el trazo genuino de H: sigue reconociendo a H y recomendando Hemograma
+        scan_genuine = client.post(
+            '/app/ocr/escanear-receta/',
+            {
+                'textos': ['[Manuscrito a revisar]'],
+                'firmas_visuales': [''],
+                'recortes_imagen': [crop_h],
+            },
+            format='json',
+        )
+        self.assertEqual(scan_genuine.status_code, status.HTTP_200_OK)
+        renglon_genuine = scan_genuine.json()['renglones'][0]
+        self.assertTrue(any(t['recorte_id'] == rec_h.id for t in renglon_genuine['trazos_coincidentes']))
+        self.assertTrue(any(
+            r['id_estudio'] == self.estudio_hemo.id and r['preseleccionado']
+            for r in renglon_genuine['recomendados']
+        ))
+
+    def test_consenso_ponderado_por_reputacion_hemograma_supera_aislado_penalizado(self):
+        """Valida que varios trazos de Hemograma con buena reputación superen a un trazo aislado penalizado de otro estudio."""
+        VisualMatcherService.limpiar_cache()
+        client = self._crear_cliente_ocr(email='consenso_rep@hospital.local', dni=99110004)
+
+        crop_h1 = self._build_handwritten_webp('Hemograma', thickness=2, scale=1.0)
+        crop_h2 = self._build_handwritten_webp('Hemograma', thickness=2, scale=1.01, tilt=0.01)
+        crop_h3 = self._build_handwritten_webp('Hemograma', thickness=3, scale=1.02, sx=1.01)
+        # Trazo aislado mal etiquetado históricamente como Orina
+        crop_o1 = self._build_handwritten_webp('Hemograma', thickness=2, scale=1.0, tilt=0.015)
+        crop_query = self._build_handwritten_webp('Hemograma', thickness=2, scale=1.01, tilt=0.01)
+
+        client.post(
+            '/app/ocr/retroalimentar/',
+            {
+                'renglones_confirmados': [
+                    {'texto': '[Manuscrito a revisar]', 'estudios_ids': [self.estudio_hemo.id], 'imagen_muestra': crop_h1},
+                    {'texto': '[Manuscrito a revisar]', 'estudios_ids': [self.estudio_hemo.id], 'imagen_muestra': crop_h2},
+                    {'texto': '[Manuscrito a revisar]', 'estudios_ids': [self.estudio_hemo.id], 'imagen_muestra': crop_h3},
+                    {'texto': '[Manuscrito a revisar]', 'estudios_ids': [self.estudio_orina.id], 'imagen_muestra': crop_o1},
+                ]
+            },
+            format='json',
+        )
+
+        rec_h1 = RecorteImagenEstudio.objects.get(imagen_muestra=crop_h1)
+        rec_h2 = RecorteImagenEstudio.objects.get(imagen_muestra=crop_h2)
+        rec_h3 = RecorteImagenEstudio.objects.get(imagen_muestra=crop_h3)
+        rec_o1 = RecorteImagenEstudio.objects.get(imagen_muestra=crop_o1)
+
+        # Reforzar reputación positiva de Hemograma y penalizar el trazo aislado de Orina
+        client.post(
+            '/app/ocr/retroalimentar/',
+            {
+                'evaluaciones_trazos': [
+                    {'recorte_id': rec_h1.id, 'es_correcto': True, 'imagen_consulta': ''},
+                    {'recorte_id': rec_h1.id, 'es_correcto': True, 'imagen_consulta': ''},
+                    {'recorte_id': rec_h2.id, 'es_correcto': True, 'imagen_consulta': ''},
+                    {'recorte_id': rec_h2.id, 'es_correcto': True, 'imagen_consulta': ''},
+                    {'recorte_id': rec_h3.id, 'es_correcto': True, 'imagen_consulta': ''},
+                    {'recorte_id': rec_o1.id, 'es_correcto': False, 'imagen_consulta': ''},
+                    {'recorte_id': rec_o1.id, 'es_correcto': False, 'imagen_consulta': ''},
+                ]
+            },
+            format='json',
+        )
+
+        scan_resp = client.post(
+            '/app/ocr/escanear-receta/',
+            {
+                'textos': ['[Manuscrito a revisar]'],
+                'firmas_visuales': [''],
+                'recortes_imagen': [crop_query],
+            },
+            format='json',
+        )
+        self.assertEqual(scan_resp.status_code, status.HTTP_200_OK)
+        renglon = scan_resp.json()['renglones'][0]
+
+        trazos = renglon['trazos_coincidentes']
+        self.assertGreaterEqual(len(trazos), 3)
+        # Los trazos positivos de Hemograma deben aparecer arriba del aislado penalizado
+        self.assertEqual(trazos[0]['estudios_ids'], [self.estudio_hemo.id])
+
+        recs = renglon['recomendados']
+        self.assertGreaterEqual(len(recs), 1)
+        self.assertEqual(recs[0]['id_estudio'], self.estudio_hemo.id)
+        self.assertTrue(recs[0]['preseleccionado'])
+
+        rec_orina = next((r for r in recs if r['id_estudio'] == self.estudio_orina.id), None)
+        if rec_orina is not None:
+            self.assertGreater(recs[0]['similitud_score'], rec_orina['similitud_score'])
+
+    def test_calibracion_automatica_acotada_y_auditoria_metadata(self):
+        """Valida calibración acotada [0.10, 0.55] con umbral >=12 (>=4 pos, >=4 neg) y metadata en AuditService."""
+        client = self._crear_cliente_ocr(email='calibracion_ocr@hospital.local', dni=99110005)
+        crop_cal = self._build_handwritten_webp('Hemograma', thickness=2, scale=1.0)
+        rec_cal = RecorteImagenEstudio.objects.create(
+            firma_visual='',
+            texto_detectado='Hemograma',
+            imagen_muestra=crop_cal,
+        )
+        RecorteEstudio.objects.create(recorte=rec_cal, estudio=self.estudio_hemo)
+
+        # chamfer_sim discrimina fuertemente Bien vs Mal; hog_cos no discrimina (0.82 vs 0.82)
+        metricas_bien = {
+            'hog_cos': 0.82,
+            'chamfer_sim': 0.96,
+            'min_zone_chamfer': 0.86,
+            'ncc_sim': 0.80,
+            'ar_diff': 0.03,
+        }
+        metricas_mal = {
+            'hog_cos': 0.82,
+            'chamfer_sim': 0.35,
+            'min_zone_chamfer': 0.72,
+            'ncc_sim': 0.70,
+            'ar_diff': 0.04,
+        }
+
+        def _eval_payload(es_correcto):
+            return {
+                'recorte_id': rec_cal.id,
+                'es_correcto': es_correcto,
+                'texto_consulta': '[Manuscrito a revisar]',
+                'imagen_consulta': '',
+                'estudios_confirmados_ids': [self.estudio_hemo.id] if es_correcto else [],
+                'score_base': 88.0 if es_correcto else 82.0,
+                'metricas': metricas_bien if es_correcto else metricas_mal,
+            }
+
+        # Paso 1: 5 Bien + 3 Mal = 8 votos (< 12 total y < 4 neg) -> NO calibra todavía
+        with self.captureOnCommitCallbacks(execute=True):
+            resp_1 = client.post(
+                '/app/ocr/retroalimentar/',
+                {
+                    'evaluaciones_trazos': (
+                        [_eval_payload(True) for _ in range(5)]
+                        + [_eval_payload(False) for _ in range(3)]
+                    )
+                },
+                format='json',
+            )
+        self.assertEqual(resp_1.status_code, status.HTTP_200_OK)
+        d1 = resp_1.json()
+        self.assertEqual(d1['trazos_evaluados_bien'], 5)
+        self.assertEqual(d1['trazos_evaluados_mal'], 3)
+        self.assertFalse(d1['pesos_calibrados'])
+
+        cal = CalibracionComparadorVisual.objects.first()
+        self.assertIsNotNone(cal)
+        self.assertAlmostEqual(cal.peso_hog, 0.25, places=4)
+        self.assertAlmostEqual(cal.peso_chamfer, 0.40, places=4)
+        self.assertAlmostEqual(cal.peso_zonas, 0.15, places=4)
+        self.assertAlmostEqual(cal.peso_ncc, 0.20, places=4)
+
+        evento_1 = EventoAuditoria.objects.filter(accion=AccionAuditoria.OCR_CORREGIDO).first()
+        self.assertIsNotNone(evento_1)
+        self.assertEqual(evento_1.metadata.get('trazos_evaluados_bien'), 5)
+        self.assertEqual(evento_1.metadata.get('trazos_evaluados_mal'), 3)
+        self.assertFalse(evento_1.metadata.get('pesos_calibrados'))
+
+        # Paso 2: +3 Bien -> 8 Bien + 3 Mal = 11 votos (aún bajo umbral)
+        with self.captureOnCommitCallbacks(execute=True):
+            resp_2 = client.post(
+                '/app/ocr/retroalimentar/',
+                {'evaluaciones_trazos': [_eval_payload(True) for _ in range(3)]},
+                format='json',
+            )
+        self.assertEqual(resp_2.status_code, status.HTTP_200_OK)
+        self.assertFalse(resp_2.json()['pesos_calibrados'])
+
+        # Paso 3: +1 Mal -> 8 Bien + 4 Mal = 12 votos (>= 12 y >= 4 pos y >= 4 neg) -> CALIBRA
+        with self.captureOnCommitCallbacks(execute=True):
+            resp_3 = client.post(
+                '/app/ocr/retroalimentar/',
+                {'evaluaciones_trazos': [_eval_payload(False)]},
+                format='json',
+            )
+        self.assertEqual(resp_3.status_code, status.HTTP_200_OK)
+        d3 = resp_3.json()
+        self.assertEqual(d3['trazos_evaluados_bien'], 0)
+        self.assertEqual(d3['trazos_evaluados_mal'], 1)
+        self.assertTrue(d3['pesos_calibrados'])
+
+        cal.refresh_from_db()
+        self.assertEqual(cal.total_votos_positivos, 8)
+        self.assertEqual(cal.total_votos_negativos, 4)
+
+        pesos = [cal.peso_hog, cal.peso_chamfer, cal.peso_zonas, cal.peso_ncc]
+        for p in pesos:
+            self.assertGreaterEqual(p, 0.10)
+            self.assertLessEqual(p, 0.55)
+        self.assertAlmostEqual(sum(pesos), 1.0, places=4)
+        self.assertGreater(cal.peso_chamfer, cal.peso_hog)
+        self.assertGreater(cal.peso_chamfer, 0.40)
+
+        evento_3 = EventoAuditoria.objects.filter(accion=AccionAuditoria.OCR_CORREGIDO).first()
+        self.assertIsNotNone(evento_3)
+        self.assertEqual(evento_3.metadata.get('trazos_evaluados_bien'), 0)
+        self.assertEqual(evento_3.metadata.get('trazos_evaluados_mal'), 1)
+        self.assertTrue(evento_3.metadata.get('pesos_calibrados'))
+
 
 
 

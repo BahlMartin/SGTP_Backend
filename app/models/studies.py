@@ -251,6 +251,14 @@ class RecorteImagenEstudio(models.Model):
         db_index=True,
         verbose_name="Marcado como Ruido / No Estudio"
     )
+    votos_positivos = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Votos Positivos (Bien)"
+    )
+    votos_negativos = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Votos Negativos (Mal)"
+    )
     fecha_registro = models.DateTimeField(auto_now_add=True, db_index=True)
 
     class Meta:
@@ -294,6 +302,89 @@ class RecorteEstudio(models.Model):
         return f"Recorte #{self.recorte_id} -> {self.estudio.nombre}"
 
 
+class FeedbackComparacionTrazo(models.Model):
+    """
+    Registro de evaluaciones humanas (Bien / Mal) sobre coincidencias de trazos históricos,
+    conservando la imagen/firma de consulta y las métricas OpenCV de esa comparación.
+    """
+    id = models.AutoField(primary_key=True)
+    recorte_historico = models.ForeignKey(
+        RecorteImagenEstudio,
+        on_delete=models.CASCADE,
+        related_name='evaluaciones_trazo',
+        verbose_name="Recorte Histórico Evaluado"
+    )
+    es_correcto = models.BooleanField(
+        db_index=True,
+        verbose_name="Evaluación Positiva (Bien)"
+    )
+    firma_visual_consulta = models.CharField(
+        max_length=32,
+        blank=True,
+        default='',
+        db_index=True,
+        verbose_name="Huella Visual de Consulta"
+    )
+    texto_consulta = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        verbose_name="Texto OCR de Consulta"
+    )
+    imagen_consulta = models.TextField(
+        blank=True,
+        default='',
+        verbose_name="Recorte de Imagen de Consulta (Base64 WebP)"
+    )
+    estudios_confirmados_ids = models.JSONField(
+        default=list,
+        verbose_name="IDs de Estudios Confirmados"
+    )
+    score_base = models.FloatField(null=True, blank=True)
+    hog_cos = models.FloatField(null=True, blank=True)
+    chamfer_sim = models.FloatField(null=True, blank=True)
+    min_zone_chamfer = models.FloatField(null=True, blank=True)
+    ncc_sim = models.FloatField(null=True, blank=True)
+    ar_diff = models.FloatField(null=True, blank=True)
+    fecha_registro = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        db_table = 'sgtp_feedback_comparacion_trazo'
+        verbose_name = 'Feedback de Comparación de Trazo'
+        verbose_name_plural = 'Feedbacks de Comparación de Trazos'
+        ordering = ['-fecha_registro']
+
+    def __str__(self) -> str:
+        etiqueta = 'Bien' if self.es_correcto else 'Mal'
+        return f"Feedback #{self.id} ({etiqueta}) -> Recorte #{self.recorte_historico_id}"
+
+
+class CalibracionComparadorVisual(models.Model):
+    """
+    Singleton de pesos calibrados del comparador visual OpenCV aprendidos
+    de forma acotada a partir del feedback humano acumulado.
+    """
+    id = models.AutoField(primary_key=True)
+    peso_hog = models.FloatField(default=0.25)
+    peso_chamfer = models.FloatField(default=0.40)
+    peso_zonas = models.FloatField(default=0.15)
+    peso_ncc = models.FloatField(default=0.20)
+    total_votos_positivos = models.PositiveIntegerField(default=0)
+    total_votos_negativos = models.PositiveIntegerField(default=0)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'sgtp_calibracion_comparador_visual'
+        verbose_name = 'Calibración del Comparador Visual'
+        verbose_name_plural = 'Calibración del Comparador Visual'
+
+    def __str__(self) -> str:
+        return (
+            f"Calibración Visual (HOG={self.peso_hog:.2f}, Chamfer={self.peso_chamfer:.2f}, "
+            f"Zonas={self.peso_zonas:.2f}, NCC={self.peso_ncc:.2f})"
+        )
+
+
 # Alias arquitectónico estándar Item
 Item = Estudios
 CatalogItem = Estudios
@@ -304,6 +395,8 @@ auditlog.register(EstudioAliasAprendido)
 auditlog.register(PerfilEstudioPatron)
 auditlog.register(RecorteImagenEstudio)
 auditlog.register(RecorteEstudio)
+auditlog.register(FeedbackComparacionTrazo)
+auditlog.register(CalibracionComparadorVisual)
 
 __all__ = [
     'TipoMuestra',
@@ -315,6 +408,8 @@ __all__ = [
     'CoocurrenciaEstudio',
     'RecorteImagenEstudio',
     'RecorteEstudio',
+    'FeedbackComparacionTrazo',
+    'CalibracionComparadorVisual',
     'Item',
     'CatalogItem',
 ]

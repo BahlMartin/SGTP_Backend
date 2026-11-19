@@ -7,11 +7,21 @@ Diseñado específicamente para ejecución liviana en RAM/CPU (Render Free 512 M
 """
 import base64
 import logging
+import math
 import re
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
+
+DEFAULT_WEIGHTS: Dict[str, float] = {
+    'hog': 0.25,
+    'chamfer': 0.40,
+    'zonas': 0.15,
+    'ncc': 0.20,
+}
+MIN_WEIGHT: float = 0.10
+MAX_WEIGHT: float = 0.55
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +101,81 @@ class VisualMatcherService:
     Motor de comparación visual de recortes médicos con caché LRU acotada en RAM.
     """
     MAX_CACHE_SIZE = 600
+    DEFAULT_WEIGHTS: Dict[str, float] = dict(DEFAULT_WEIGHTS)
+    MIN_WEIGHT: float = MIN_WEIGHT
+    MAX_WEIGHT: float = MAX_WEIGHT
     _cache: 'OrderedDict[Tuple[Any, ...], Optional[PreparedVisualCrop]]' = OrderedDict()
     _cache_lock = threading.Lock()
+
+    @classmethod
+    def normalizar_pesos(cls, pesos: Optional[Dict[str, float]]) -> Dict[str, float]:
+        """
+        Normaliza y acota los pesos del comparador visual al rango [MIN_WEIGHT, MAX_WEIGHT]
+        garantizando suma exacta igual a 1.0 mediante clamp-normalización iterativa.
+        """
+        keys = tuple(cls.DEFAULT_WEIGHTS.keys())
+        if not isinstance(pesos, dict) or not pesos:
+            return dict(cls.DEFAULT_WEIGHTS)
+
+        w: Dict[str, float] = {}
+        for k in keys:
+            raw_val = pesos.get(k, cls.DEFAULT_WEIGHTS[k])
+            if raw_val is None or isinstance(raw_val, bool):
+                w[k] = cls.DEFAULT_WEIGHTS[k]
+                continue
+            try:
+                fval = float(raw_val)
+            except (TypeError, ValueError):
+                w[k] = cls.DEFAULT_WEIGHTS[k]
+                continue
+            w[k] = max(0.0, fval) if math.isfinite(fval) else cls.DEFAULT_WEIGHTS[k]
+
+        total = sum(w.values())
+        if total <= 0.0:
+            return dict(cls.DEFAULT_WEIGHTS)
+        w = {k: w[k] / total for k in keys}
+
+        for _ in range(12):
+            w = {k: max(cls.MIN_WEIGHT, min(cls.MAX_WEIGHT, w[k])) for k in keys}
+            s = sum(w.values())
+            diff = 1.0 - s
+            if abs(diff) <= 1e-12:
+                break
+            if diff > 0.0:
+                adjustable = [k for k in keys if w[k] < cls.MAX_WEIGHT - 1e-12]
+            else:
+                adjustable = [k for k in keys if w[k] > cls.MIN_WEIGHT + 1e-12]
+            if not adjustable:
+                break
+            fixed_sum = sum(w[k] for k in keys if k not in adjustable)
+            target_adj_sum = 1.0 - fixed_sum
+            adj_sum = sum(w[k] for k in adjustable)
+            if adj_sum <= 0.0:
+                equal_share = target_adj_sum / float(len(adjustable))
+                for k in adjustable:
+                    w[k] = equal_share
+            else:
+                scale = target_adj_sum / adj_sum
+                for k in adjustable:
+                    w[k] *= scale
+
+        rounded = {
+            k: round(max(cls.MIN_WEIGHT, min(cls.MAX_WEIGHT, w[k])), 6)
+            for k in keys
+        }
+        err = round(1.0 - sum(rounded.values()), 6)
+        if err != 0.0:
+            candidates = sorted(
+                keys,
+                key=lambda k: rounded[k],
+                reverse=(err < 0.0),
+            )
+            for k in candidates:
+                cand_val = round(rounded[k] + err, 6)
+                if cls.MIN_WEIGHT <= cand_val <= cls.MAX_WEIGHT:
+                    rounded[k] = cand_val
+                    break
+        return rounded
 
     @classmethod
     def is_available(cls) -> bool:
@@ -243,32 +326,36 @@ class VisualMatcherService:
         return prepared
 
     @classmethod
-    def comparar_preparados(
+    def comparar_preparados_detallado(
         cls,
         crop_a: Optional[PreparedVisualCrop],
         crop_b: Optional[PreparedVisualCrop],
-    ) -> float:
+        pesos: Optional[Dict[str, float]] = None,
+    ) -> Tuple[float, Dict[str, float]]:
         """
-        Compara dos recortes preparados devolviendo similitud [0.0, 100.0].
+        Compara dos recortes preparados devolviendo (similitud [0.0, 100.0], metricas).
         Combina compuerta de relación de aspecto, HOG Coseno, alineación NCC,
         Chamfer Distance simétrico y consistencia en 3 tercios horizontales.
         """
         if not cls.is_available() or crop_a is None or crop_b is None:
-            return 0.0
+            return 0.0, {}
 
         ar_a = crop_a.aspect_ratio
         ar_b = crop_b.aspect_ratio
         max_ar = max(ar_a, ar_b)
         if max_ar <= 0.0:
-            return 0.0
+            return 0.0, {}
 
         ar_diff = abs(ar_a - ar_b) / max_ar
         if ar_diff > 0.35:
-            return 0.0
+            return 0.0, {}
 
         hog_cos = max(0.0, min(1.0, float(np.dot(crop_a.hog_vec, crop_b.hog_vec))))
         if hog_cos < 0.45:
-            return round(hog_cos * 55.0, 2)
+            return round(hog_cos * 55.0, 2), {
+                'hog_cos': round(hog_cos, 4),
+                'ar_diff': round(ar_diff, 4),
+            }
 
         tw = int(np.clip(round(32.0 * (ar_a + ar_b) * 0.5), 18, 128))
         mask_a = cv2.resize(crop_a.binary_mask, (tw, 32), interpolation=cv2.INTER_AREA)
@@ -277,7 +364,7 @@ class VisualMatcherService:
         _, b = cv2.threshold(mask_b, 50, 255, cv2.THRESH_BINARY)
 
         if not np.any(a > 0) or not np.any(b > 0):
-            return 0.0
+            return 0.0, {}
 
         pad = 4
         b_pad = cv2.copyMakeBorder(b, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=0)
@@ -318,29 +405,53 @@ class VisualMatcherService:
         ncc_sim = max(0.0, float(max_val))
         ar_pen = max(0.0, (ar_diff - 0.15) * 0.45)
 
+        w = cls.normalizar_pesos(pesos)
         raw = (
-            0.25 * hog_cos
-            + 0.40 * chamfer_sim
-            + 0.15 * min_zone_chamfer
-            + 0.20 * ncc_sim
+            w['hog'] * hog_cos
+            + w['chamfer'] * chamfer_sim
+            + w['zonas'] * min_zone_chamfer
+            + w['ncc'] * ncc_sim
             - ar_pen
         )
         if ncc_sim < 0.45:
             raw *= (0.75 + 0.25 * (ncc_sim / 0.45))
 
-        return round(max(0.0, min(1.0, raw)) * 100.0, 2)
+        score = round(max(0.0, min(1.0, raw)) * 100.0, 2)
+        metricas = {
+            'hog_cos': round(hog_cos, 4),
+            'chamfer_sim': round(chamfer_sim, 4),
+            'min_zone_chamfer': round(min_zone_chamfer, 4),
+            'ncc_sim': round(ncc_sim, 4),
+            'ar_diff': round(ar_diff, 4),
+        }
+        return score, metricas
 
     @classmethod
-    def buscar_mejores_coincidencias(
+    def comparar_preparados(
+        cls,
+        crop_a: Optional[PreparedVisualCrop],
+        crop_b: Optional[PreparedVisualCrop],
+        pesos: Optional[Dict[str, float]] = None,
+    ) -> float:
+        """
+        Compara dos recortes preparados devolviendo similitud [0.0, 100.0].
+        """
+        score, _ = cls.comparar_preparados_detallado(crop_a, crop_b, pesos=pesos)
+        return score
+
+    @classmethod
+    def buscar_mejores_coincidencias_detallado(
         cls,
         query_crop: Optional[PreparedVisualCrop],
         candidatos: List[Tuple[int, PreparedVisualCrop]],
-        top_k_stage1: int = 15,
+        top_k_stage1: int = 25,
         min_hog_stage1: float = 0.50,
-    ) -> Dict[int, float]:
+        pesos: Optional[Dict[str, float]] = None,
+    ) -> Dict[int, Tuple[float, Dict[str, float]]]:
         """
         Filtra masivamente mediante producto matriz-vector HOG sobre candidatos compatibles en proporción
-        y ejecuta la verificación fina Chamfer + NCC solo sobre los Top-K candidatos más prometedores.
+        y ejecuta la verificación fina Chamfer + NCC solo sobre los Top-K candidatos más prometedores,
+        retornando {cand_id: (score, metricas)}.
         """
         if not cls.is_available() or query_crop is None or not candidatos:
             return {}
@@ -380,10 +491,37 @@ class VisualMatcherService:
             return {}
 
         preseleccion.sort(key=lambda item: item[0], reverse=True)
-        resultados: Dict[int, float] = {}
+        pesos_norm = cls.normalizar_pesos(pesos)
+        resultados: Dict[int, Tuple[float, Dict[str, float]]] = {}
         for _, cand_id, cand_crop in preseleccion[:top_k_stage1]:
-            score = cls.comparar_preparados(query_crop, cand_crop)
+            score, metricas = cls.comparar_preparados_detallado(
+                query_crop,
+                cand_crop,
+                pesos=pesos_norm,
+            )
             if score > 0.0:
-                resultados[cand_id] = score
+                resultados[cand_id] = (score, metricas)
 
         return resultados
+
+    @classmethod
+    def buscar_mejores_coincidencias(
+        cls,
+        query_crop: Optional[PreparedVisualCrop],
+        candidatos: List[Tuple[int, PreparedVisualCrop]],
+        top_k_stage1: int = 15,
+        min_hog_stage1: float = 0.50,
+        pesos: Optional[Dict[str, float]] = None,
+    ) -> Dict[int, float]:
+        """
+        Filtra masivamente mediante producto matriz-vector HOG sobre candidatos compatibles en proporción
+        y ejecuta la verificación fina Chamfer + NCC solo sobre los Top-K candidatos más prometedores.
+        """
+        detallados = cls.buscar_mejores_coincidencias_detallado(
+            query_crop=query_crop,
+            candidatos=candidatos,
+            top_k_stage1=top_k_stage1,
+            min_hog_stage1=min_hog_stage1,
+            pesos=pesos,
+        )
+        return {cand_id: score for cand_id, (score, _) in detallados.items()}

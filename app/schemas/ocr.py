@@ -51,6 +51,24 @@ class OCRResultadoEstudioSerializer(serializers.Serializer):
     imagen_muestra = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
 
+class OCRTrazoCoincidenteSerializer(serializers.Serializer):
+    recorte_id = serializers.IntegerField()
+    imagen_muestra = serializers.CharField(required=False, allow_blank=True, default='')
+    estudios_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        default=list
+    )
+    estudios_nombres = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        default=list
+    )
+    similitud_score = serializers.FloatField()
+    score_base = serializers.FloatField()
+    metricas = serializers.DictField(required=False, default=dict)
+
+
 class OCRRenglonMapeadoSerializer(serializers.Serializer):
     indice = serializers.IntegerField()
     texto_renglon = serializers.CharField()
@@ -60,6 +78,11 @@ class OCRRenglonMapeadoSerializer(serializers.Serializer):
     imagen_muestra_conocida = serializers.CharField(allow_blank=True, allow_null=True, required=False)
     imagenes_muestra_conocidas = serializers.ListField(
         child=serializers.CharField(),
+        required=False,
+        default=list
+    )
+    trazos_coincidentes = OCRTrazoCoincidenteSerializer(
+        many=True,
         required=False,
         default=list
     )
@@ -89,6 +112,21 @@ class RenglonConfirmadoFeedbackSerializer(serializers.Serializer):
         allow_empty=False
     )
     imagen_muestra = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+
+
+class EvaluacionTrazoFeedbackSerializer(serializers.Serializer):
+    recorte_id = serializers.IntegerField(min_value=1)
+    es_correcto = serializers.BooleanField()
+    texto_consulta = serializers.CharField(required=False, allow_blank=True, default='')
+    firma_visual_consulta = serializers.CharField(required=False, allow_blank=True, default='')
+    imagen_consulta = serializers.CharField(required=False, allow_blank=True, allow_null=True, default='')
+    estudios_confirmados_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        default=list
+    )
+    score_base = serializers.FloatField(required=False, allow_null=True)
+    metricas = serializers.DictField(required=False, default=dict)
 
 
 class RetroalimentacionOCRSerializer(serializers.Serializer):
@@ -126,6 +164,12 @@ class RetroalimentacionOCRSerializer(serializers.Serializer):
         default=list,
         help_text="Lista opcional de { texto, imagen_muestra } descartados como ruido visual"
     )
+    evaluaciones_trazos = EvaluacionTrazoFeedbackSerializer(
+        many=True,
+        required=False,
+        default=list,
+        help_text="Evaluaciones explícitas (Bien / Mal) sobre trazos históricos coincidentes."
+    )
 
 
 class RecorteConsultaIASerializer(serializers.Serializer):
@@ -150,10 +194,12 @@ __all__ = [
     'RecetaUploadSerializer',
     'OCRScanRequestSerializer',
     'OCRResultadoEstudioSerializer',
+    'OCRTrazoCoincidenteSerializer',
     'OCRRenglonMapeadoSerializer',
     'OCRSugerenciaContextualSerializer',
     'OCRScanResponseSerializer',
     'RenglonConfirmadoFeedbackSerializer',
+    'EvaluacionTrazoFeedbackSerializer',
     'RetroalimentacionOCRSerializer',
     'RecorteConsultaIASerializer',
     'InterpretarRecortesRequestSerializer',

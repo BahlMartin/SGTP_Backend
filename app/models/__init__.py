@@ -16,7 +16,9 @@ from app.models.studies import (
     PerfilEstudioPatron,
     CoocurrenciaEstudio,
     RecorteImagenEstudio,
-    RecorteEstudio
+    RecorteEstudio,
+    FeedbackComparacionTrazo,
+    CalibracionComparadorVisual,
 )
 from app.models.patient import Paciente
 from app.models.box import (
@@ -65,6 +67,8 @@ __all__ = [
     'CoocurrenciaEstudio',
     'RecorteImagenEstudio',
     'RecorteEstudio',
+    'FeedbackComparacionTrazo',
+    'CalibracionComparadorVisual',
     'Paciente',
     'Box',
     'Ticket',

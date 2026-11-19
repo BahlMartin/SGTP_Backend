@@ -158,7 +158,8 @@ class RetroalimentarOCRView(APIView):
             asociaciones_directas=data.get('asociaciones_directas', []),
             renglones_confirmados=data.get('renglones_confirmados', []),
             lineas_descartadas=data.get('lineas_descartadas', []),
-            recortes_descartados=data.get('recortes_descartados', [])
+            recortes_descartados=data.get('recortes_descartados', []),
+            evaluaciones_trazos=data.get('evaluaciones_trazos', [])
         )
 
         AuditService.registrar_evento(
@@ -170,7 +171,10 @@ class RetroalimentarOCRView(APIView):
                 'estudios_confirmados': len(data.get('estudios_confirmados_ids', [])),
                 'asociaciones_aprendidas': len(data.get('asociaciones_directas', [])),
                 'renglones_confirmados': len(data.get('renglones_confirmados', [])),
-                'lineas_descartadas': len(data.get('lineas_descartadas', []))
+                'lineas_descartadas': len(data.get('lineas_descartadas', [])),
+                'trazos_evaluados_bien': resultado.get('trazos_evaluados_bien', 0),
+                'trazos_evaluados_mal': resultado.get('trazos_evaluados_mal', 0),
+                'pesos_calibrados': bool(resultado.get('pesos_calibrados', False)),
             },
             request=request
         )
