@@ -6,13 +6,14 @@ import io
 import json
 import cv2
 import numpy as np
+import requests
 from unittest.mock import patch, MagicMock
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 from rest_framework import status
 
 from app.models.user import Personal, RolPersonal
-from app.models.audit import EventoAuditoria, AccionAuditoria
+from app.models.audit import EventoAuditoria, AccionAuditoria, ResultadoAuditoria
 from app.models.studies import (
     Estudios,
     TipoMuestra,
@@ -1747,6 +1748,239 @@ class OCRIntegrationTestCase(TestCase):
             self.assertTrue(ids_esperados.issubset(ids_preseleccionados))
             for dist_id in ids_distractores_prohibidos:
                 self.assertNotIn(dist_id, ids_preseleccionados)
+
+    def test_proteinuria_y_estudios_orina_baja_masa_nefronal(self):
+        """Valida mapeo de proteinuria (incluso variantes OCR), albuminuria, creatininuria e ionograma sin falsos positivos séricos."""
+        Estudios.objects.all().update(activo=False)
+
+        est_prot_orina = Estudios.objects.create(
+            codigo_practica='767',
+            nombre='Proteínas en orina de 24hs',
+            tipo_muestra=TipoMuestra.ORINA,
+            activo=True,
+        )
+        est_microalb = Estudios.objects.create(
+            codigo_practica='1308',
+            nombre='MICROALBUMINURIA (orina DE 24hs)',
+            tipo_muestra=TipoMuestra.ORINA,
+            activo=True,
+        )
+        est_creatinuria = Estudios.objects.create(
+            codigo_practica='1941',
+            nombre='CREATINURIA',
+            tipo_muestra=TipoMuestra.ORINA,
+            activo=True,
+        )
+        est_iono = Estudios.objects.create(
+            codigo_practica='IONO-02',
+            nombre='Ionograma',
+            tipo_muestra=TipoMuestra.SANGRE,
+            activo=True,
+        )
+        est_iono_orina = Estudios.objects.create(
+            codigo_practica='1304',
+            nombre='Ionograma en orina de 24HS',
+            tipo_muestra=TipoMuestra.ORINA,
+            activo=True,
+        )
+
+        # Distractores proteicos en suero que antes opacaban a 'proteinuria'
+        est_pcr = Estudios.objects.create(
+            codigo_practica='PCR-01',
+            nombre='Proteina C Reactiva',
+            tipo_muestra=TipoMuestra.SANGRE,
+            activo=True,
+        )
+        est_prot_tot = Estudios.objects.create(
+            codigo_practica='PROT-TOT',
+            nombre='Proteínas totales',
+            tipo_muestra=TipoMuestra.SANGRE,
+            activo=True,
+        )
+        est_proteinograma = Estudios.objects.create(
+            codigo_practica='PRG-01',
+            nombre='PROTEINOGRAMA',
+            tipo_muestra=TipoMuestra.SANGRE,
+            activo=True,
+        )
+        est_afp = Estudios.objects.create(
+            codigo_practica='AFP-01',
+            nombre='Alfa feto proteína (AFP)',
+            tipo_muestra=TipoMuestra.SANGRE,
+            activo=True,
+        )
+
+        for texto_prot in ('proteinuria', 'poternuma', 'ptenunia', 'proternumn'):
+            score_orina = OCRIntegrationService.calcular_similitud_estudio(
+                texto_prot,
+                est_prot_orina.nombre,
+                est_prot_orina.codigo_practica,
+            )
+            self.assertGreaterEqual(score_orina, 95.0, f"Falló score para '{texto_prot}'")
+            for dist in (est_pcr, est_prot_tot, est_proteinograma, est_afp):
+                score_dist = OCRIntegrationService.calcular_similitud_estudio(
+                    texto_prot,
+                    dist.nombre,
+                    dist.codigo_practica,
+                )
+                self.assertEqual(score_dist, 0.0, f"Falso positivo '{dist.nombre}' con '{texto_prot}'")
+
+        mapeo = OCRIntegrationService.mapear_textos_con_estudios(
+            ['ptenunia', 'albumimua', 'ceahmimua', 'ionograma'],
+            permitir_vision_ia=False,
+        )
+        ids_sug = {s['id_estudio'] for s in mapeo['sugerencias']}
+        self.assertIn(est_prot_orina.id, ids_sug)
+        self.assertIn(est_microalb.id, ids_sug)
+        self.assertIn(est_creatinuria.id, ids_sug)
+        self.assertTrue(est_iono.id in ids_sug or est_iono_orina.id in ids_sug)
+        for dist in (est_pcr, est_prot_tot, est_proteinograma, est_afp):
+            self.assertNotIn(dist.id, ids_sug)
+
+    @override_settings(
+        OCR_VISION_API_KEY='test-gemini-36-key',
+        OCR_VISION_PROVIDER='gemini',
+        OCR_VISION_MODEL='gemini-3.6-flash',
+    )
+    @patch('app.services.ocr_service.requests.post')
+    def test_gemini_solo_llama_gemini_3_6_flash_sin_fallback(self, mock_post):
+        """Valida que Gemini llame exclusivamente a gemini-3.6-flash una sola vez y devuelva aviso claro sin fallback."""
+        self.assertEqual(OCRIntegrationService._resolver_modelo_gemini(), 'gemini-3.6-flash')
+        crop_ctx = self._build_handwritten_webp('proteinuria', thickness=2, scale=1.0)
+
+        for status_code, texto_esperado in ((429, '429'), (503, '503'), (404, '404')):
+            mock_post.reset_mock()
+            resp_err = MagicMock()
+            resp_err.status_code = status_code
+            mock_post.return_value = resp_err
+
+            res = OCRIntegrationService.interpretar_receta_contextual(
+                imagen_contextual=crop_ctx,
+                contexto_renglones=[{'indice': 0, 'texto_ocr': 'ptenunia'}],
+            )
+            self.assertEqual(mock_post.call_count, 1)
+            called_url = mock_post.call_args[0][0]
+            self.assertIn('models/gemini-3.6-flash:generateContent', called_url)
+            self.assertEqual(res['modelo_usado'], 'gemini-3.6-flash')
+            self.assertIn(texto_esperado, res['error_ia'])
+            self.assertEqual(res['resultados'], [])
+            self.assertEqual(res['renglones_nuevos'], [])
+
+        mock_post.reset_mock()
+        mock_post.side_effect = requests.exceptions.Timeout('read timeout')
+        res_timeout = OCRIntegrationService.interpretar_receta_contextual(imagen_contextual=crop_ctx)
+        self.assertEqual(mock_post.call_count, 1)
+        self.assertEqual(res_timeout['modelo_usado'], 'gemini-3.6-flash')
+        self.assertIn('Tiempo de espera', res_timeout['error_ia'])
+
+    @override_settings(
+        OCR_VISION_API_KEY='test-gemini-36-key',
+        OCR_VISION_PROVIDER='gemini',
+        OCR_VISION_MODEL='gemini-3.6-flash',
+    )
+    @patch('app.services.ocr_service.requests.post')
+    def test_endpoint_interpretar_receta_contextual_catalogo_completo_y_renglones_nuevos(self, mock_post):
+        """Valida lectura contextual única, catálogo >200 sin truncar, renglones nuevos y auditoría."""
+        est_prot_orina = Estudios.objects.create(
+            codigo_practica='767',
+            nombre='Proteínas en orina de 24hs',
+            tipo_muestra=TipoMuestra.ORINA,
+            activo=True,
+        )
+        est_microalb = Estudios.objects.create(
+            codigo_practica='1308',
+            nombre='MICROALBUMINURIA (orina DE 24hs)',
+            tipo_muestra=TipoMuestra.ORINA,
+            activo=True,
+        )
+        Estudios.objects.bulk_create([
+            Estudios(
+                codigo_practica=f'EXTRA-{i:03d}',
+                nombre=f'Estudio Extra Catálogo {i:03d}',
+                tipo_muestra=TipoMuestra.SANGRE,
+                activo=True,
+            )
+            for i in range(1, 206)
+        ])
+        Estudios.objects.create(
+            codigo_practica='ZZZ-299',
+            nombre='Zzz Vitamina Especial Final',
+            tipo_muestra=TipoMuestra.SANGRE,
+            activo=True,
+        )
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            'candidates': [{
+                'content': {
+                    'parts': [{
+                        'text': json.dumps({
+                            'diagnostico_detectado': 'baja masa nefronal',
+                            'notas_muestra': 'orina muestra aislada',
+                            'estudios': [
+                                {
+                                    'indice_renglon': None,
+                                    'texto_manuscrito': 'proteinuria',
+                                    'estudios_catalogo': ['Proteínas en orina de 24hs'],
+                                },
+                                {
+                                    'indice_renglon': 0,
+                                    'texto_manuscrito': 'albuminuria',
+                                    'estudios_catalogo': ['MICROALBUMINURIA (orina DE 24hs)'],
+                                },
+                            ],
+                        })
+                    }]
+                }
+            }]
+        }
+        mock_post.return_value = mock_resp
+
+        client = self._crear_cliente_ocr(email='contextual_ia@hospital.local', dni=99110088)
+        crop_ctx = self._build_handwritten_webp('proteinuria albuminuria', thickness=2, scale=1.0)
+        with self.captureOnCommitCallbacks(execute=True):
+            resp = client.post(
+                '/app/ocr/interpretar-recortes/',
+                {
+                    'imagen_contextual': crop_ctx,
+                    'contexto_renglones': [
+                        {'indice': 0, 'texto_ocr': 'albummna'},
+                    ],
+                },
+                format='json',
+            )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        mock_post.assert_called_once()
+        called_url = mock_post.call_args[0][0]
+        self.assertIn('models/gemini-3.6-flash:generateContent', called_url)
+
+        sent_prompt = mock_post.call_args[1]['json']['contents'][0]['parts'][0]['text']
+        self.assertIn('Zzz Vitamina Especial Final', sent_prompt)
+
+        payload = resp.json()
+        self.assertEqual(payload['error_ia'], '')
+        self.assertEqual(payload['modelo_usado'], 'gemini-3.6-flash')
+        self.assertEqual(payload['diagnostico_detectado'], 'baja masa nefronal')
+        self.assertEqual(payload['notas_muestra'], 'orina muestra aislada')
+        self.assertEqual(len(payload['resultados']), 1)
+        self.assertEqual(payload['resultados'][0]['indice'], 0)
+        self.assertEqual(payload['resultados'][0]['recomendados'][0]['id_estudio'], est_microalb.id)
+        self.assertEqual(payload['resultados'][0]['recomendados'][0]['origen_deteccion'], 'VISION_IA')
+        self.assertFalse(payload['resultados'][0]['recomendados'][0]['preseleccionado'])
+
+        self.assertEqual(len(payload['renglones_nuevos']), 1)
+        self.assertEqual(payload['renglones_nuevos'][0]['texto_transcrito_ia'], 'proteinuria')
+        self.assertEqual(payload['renglones_nuevos'][0]['recomendados'][0]['id_estudio'], est_prot_orina.id)
+        self.assertEqual(payload['renglones_nuevos'][0]['recomendados'][0]['origen_deteccion'], 'VISION_IA')
+        self.assertFalse(payload['renglones_nuevos'][0]['recomendados'][0]['preseleccionado'])
+
+        audit = EventoAuditoria.objects.filter(accion=AccionAuditoria.RECETA_ESCANEADA).order_by('-id').first()
+        self.assertIsNotNone(audit)
+        self.assertEqual(audit.resultado, ResultadoAuditoria.EXITO)
+        self.assertEqual(audit.metadata.get('modo'), 'receta_contextual_ia')
+        self.assertEqual(audit.metadata.get('motor_ia'), 'gemini-3.6-flash')
+
 
 
 

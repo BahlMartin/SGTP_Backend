@@ -179,12 +179,49 @@ class RecorteConsultaIASerializer(serializers.Serializer):
     imagen_recorte = serializers.CharField(allow_blank=False)
 
 
+class ContextoRenglonIASerializer(serializers.Serializer):
+    indice = serializers.IntegerField(min_value=0)
+    texto_ocr = serializers.CharField(required=False, allow_blank=True, default='')
+
+
 class InterpretarRecortesRequestSerializer(serializers.Serializer):
     recortes = RecorteConsultaIASerializer(
         many=True,
-        allow_empty=False,
-        help_text="Recortes aislados marcados explícitamente por Admisión para interpretar con Visión IA."
+        required=False,
+        default=list,
+        help_text="Recortes aislados opcionales para compatibilidad retroactiva."
     )
+    imagen_contextual = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default='',
+        help_text="Imagen DataURL única de la receta recortada/tapada sin PHI para lectura contextual en Gemini."
+    )
+    contexto_renglones = ContextoRenglonIASerializer(
+        many=True,
+        required=False,
+        default=list,
+        help_text="Renglones previos detectados por PaddleOCR para vincular resultados existentes e identificar faltantes."
+    )
+
+    def validate(self, attrs: Dict[str, Any]) -> Dict[str, Any]:
+        recortes = attrs.get('recortes') or []
+        imagen_ctx = str(attrs.get('imagen_contextual') or '').strip()
+        if not imagen_ctx and not recortes:
+            raise serializers.ValidationError(
+                "Debe proporcionar 'imagen_contextual' o al menos un elemento en 'recortes'."
+            )
+        if imagen_ctx:
+            if not imagen_ctx.startswith('data:image/') or ';base64,' not in imagen_ctx:
+                raise serializers.ValidationError({
+                    'imagen_contextual': "La imagen contextual debe ser un DataURL base64 válido (data:image/...;base64,...)."
+                })
+            if len(imagen_ctx) > 8_000_000:
+                raise serializers.ValidationError({
+                    'imagen_contextual': "La imagen contextual supera el tamaño máximo permitido."
+                })
+            attrs['imagen_contextual'] = imagen_ctx
+        return attrs
 
 
 # Alias
@@ -202,6 +239,7 @@ __all__ = [
     'EvaluacionTrazoFeedbackSerializer',
     'RetroalimentacionOCRSerializer',
     'RecorteConsultaIASerializer',
+    'ContextoRenglonIASerializer',
     'InterpretarRecortesRequestSerializer',
     'OCRUploadSchema',
 ]

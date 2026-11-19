@@ -184,8 +184,8 @@ class RetroalimentarOCRView(APIView):
 
 class InterpretarRecortesIAView(APIView):
     """
-    Endpoint bajo demanda de Admisión para interpretar únicamente los recortes manuscritos
-    marcados explícitamente en pantalla (sin enviar jamás la receta completa ni PHI).
+    Endpoint bajo demanda de Admisión para interpretar la imagen contextual saneada
+    de la receta (sin PHI ni firma médica) o recortes aislados heredados con Gemini 3.6 Flash.
     """
     parser_classes = [JSONParser]
     permission_classes = [IsAuthenticated, IsAdmisionOrJefa]
@@ -200,8 +200,51 @@ class InterpretarRecortesIAView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        recortes = serializer.validated_data['recortes']
+        data = serializer.validated_data
+        imagen_contextual = data.get('imagen_contextual') or ''
+        if imagen_contextual:
+            contexto_renglones = data.get('contexto_renglones') or []
+            res = OCRIntegrationService.interpretar_receta_contextual(
+                imagen_contextual=imagen_contextual,
+                contexto_renglones=contexto_renglones,
+            )
+            error_ia = res.get('error_ia') or ''
+            resultados = res.get('resultados') or []
+            renglones_nuevos = res.get('renglones_nuevos') or []
+            modelo_usado = res.get('modelo_usado') or OCRIntegrationService._resolver_modelo_gemini()
+
+            AuditService.registrar_evento(
+                accion=AccionAuditoria.RECETA_ESCANEADA,
+                usuario=request.user,
+                resultado=ResultadoAuditoria.FALLO if error_ia else ResultadoAuditoria.EXITO,
+                descripcion='Escaneo contextual con IA Gemini sobre orden médica saneada',
+                metadata={
+                    'modo': 'receta_contextual_ia',
+                    'motor_ia': modelo_usado,
+                    'renglones_contexto': len(contexto_renglones),
+                    'renglones_actualizados': len(resultados),
+                    'renglones_nuevos': len(renglones_nuevos),
+                    'error_ia': error_ia,
+                },
+                request=request
+            )
+
+            return Response(
+                {
+                    "resultados": resultados,
+                    "renglones_nuevos": renglones_nuevos,
+                    "diagnostico_detectado": res.get('diagnostico_detectado') or '',
+                    "notas_muestra": res.get('notas_muestra') or '',
+                    "modelo_usado": modelo_usado,
+                    "error_ia": error_ia,
+                    "total_procesados": len(resultados) + len(renglones_nuevos),
+                },
+                status=status.HTTP_200_OK
+            )
+
+        recortes = data.get('recortes') or []
         resultados = OCRIntegrationService.interpretar_recortes_seleccionados(recortes)
+        modelo_usado = OCRIntegrationService._resolver_modelo_gemini()
 
         AuditService.registrar_evento(
             accion=AccionAuditoria.RECETA_ESCANEADA,
@@ -212,7 +255,7 @@ class InterpretarRecortesIAView(APIView):
                 'recortes_enviados': len(recortes),
                 'recortes_resueltos': sum(1 for r in resultados if r.get('recomendados')),
                 'modo': 'recortes_bajo_demanda_ia',
-                'motor_ia': 'gemini'
+                'motor_ia': modelo_usado,
             },
             request=request
         )
@@ -220,6 +263,11 @@ class InterpretarRecortesIAView(APIView):
         return Response(
             {
                 "resultados": resultados,
+                "renglones_nuevos": [],
+                "diagnostico_detectado": "",
+                "notas_muestra": "",
+                "modelo_usado": modelo_usado,
+                "error_ia": "",
                 "total_procesados": len(resultados)
             },
             status=status.HTTP_200_OK

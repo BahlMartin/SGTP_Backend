@@ -26,6 +26,8 @@ services:
         sync: false
       - key: OCR_SERVICE_URL
         sync: false
+      - key: OCR_VISION_MODEL
+        value: "gemini-3.6-flash"
       - key: DJANGO_CORS_ALLOWED_ORIGINS
         sync: false
       - key: CELERY_BROKER_URL

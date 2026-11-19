@@ -49,6 +49,7 @@ ALIAS_CLINICOS_MAP: Dict[str, str] = {
     'citologico': 'hemograma',
     'ycllte': 'hemograma',
     '4cll6r6': 'hemograma',
+    '4ccl6t6': 'hemograma',
 
     # Glucemia
     'gluc': 'glucemia',
@@ -76,6 +77,23 @@ ALIAS_CLINICOS_MAP: Dict[str, str] = {
     'cociente': 'albuminuria',
     'wuite aisiat': 'albuminuria',
     'cuite aislaet': 'albuminuria',
+    'proteinuria': 'proteinas en orina',
+    'proteinura': 'proteinas en orina',
+    'proteinuna': 'proteinas en orina',
+    'poternuma': 'proteinas en orina',
+    'ptenunia': 'proteinas en orina',
+    'proternumn': 'proteinas en orina',
+    'proteinas orina': 'proteinas en orina',
+    'proteina en orina': 'proteinas en orina',
+    'albuminuria': 'microalbuminuria',
+    'albummna': 'microalbuminuria',
+    'albummua': 'microalbuminuria',
+    'albumimua': 'microalbuminuria',
+    'alburninuria': 'microalbuminuria',
+    'creatininuria': 'creatinuria',
+    'creatinuria': 'creatinuria',
+    'ceahm mua': 'creatinuria',
+    'ceahmimua': 'creatinuria',
 
     # Función renal
     'urea': 'uremia',
@@ -107,6 +125,7 @@ ALIAS_CLINICOS_MAP: Dict[str, str] = {
     'hypato': 'hepatograma',
     'hypatograma': 'hepatograma',
     'pote ro': 'hepatograma',
+    'pote wom': 'hepatograma',
     'potero': 'hepatograma',
     'tpots rom': 'hepatograma',
     'itpote som': 'hepatograma',
@@ -124,6 +143,7 @@ ALIAS_CLINICOS_MAP: Dict[str, str] = {
     # Perfil lipídico
     'lipidograma': 'perfil lipidico',
     'h d p': 'lipidograma',
+    'hx d p': 'lipidograma',
     'hdl ldl tg': 'lipidograma',
     'hdl ldl': 'lipidograma',
     'colesterol': 'colesterol',
@@ -192,7 +212,7 @@ _CALIFICADORES_DIFERENCIALES = {
 }
 _MARCADORES_PERFIL_LIPIDICO = {
     'hdl', 'ldl', 'lipidograma', 'perfil lipidico',
-    'h d p', 'covtemel', 'costemel', 'costerel',
+    'h d p', 'hx d p', 'covtemel', 'costemel', 'costerel',
 }
 
 
@@ -260,7 +280,7 @@ def _es_consulta_ratio_alb_creat(tokens: List[str]) -> bool:
     )
     es_par_cursivo_rac = (
         ('wuite' in tok_set or 'cuite' in tok_set or 'cociente' in tok_set)
-        and ('aisiat' in tok_set or 'aislaet' in tok_set or 'alb' in tok_set or 'albuminuria' in tok_set)
+        and ('aisiat' in tok_set or 'aislaet' in tok_set or 'asilnt' in tok_set or 'alb' in tok_set or 'albuminuria' in tok_set)
     )
     return ((tiene_alb and tiene_creat) or es_par_cursivo_rac) and not tiene_exclusion
 
@@ -274,6 +294,57 @@ def _estudio_es_rac(estudio_norm: str) -> bool:
     tiene_alb = any(w.startswith('alb') for w in palabras)
     tiene_cre = any(w.startswith('cre') for w in palabras)
     return tiene_alb and tiene_cre and ('calcio' not in p_set)
+
+
+def _es_consulta_proteinuria(tokens: List[str]) -> bool:
+    """Detecta consultas por proteinuria / proteínas en orina (excluyendo PCR, proteinograma y totales)."""
+    tok_set = set(tokens)
+    for t in list(tok_set):
+        tok_set.update(_variantes_ocr_token(t))
+        if t in ALIAS_CLINICOS_MAP:
+            tok_set.update(ALIAS_CLINICOS_MAP[t].split())
+    if {'reactiva', 'pcr', 'proteinograma', 'alfa', 'feto', 'totales'} & tok_set:
+        return False
+    direct_terms = {'proteinuria', 'proteinura', 'proteinuna', 'poternuma', 'poteriuma', 'ptenunia', 'proternumn'}
+    if tok_set & direct_terms:
+        return True
+    if any(len(t) >= 8 and fuzz.ratio(t, 'proteinuria') >= 82.0 for t in tok_set):
+        return True
+    tiene_prot = any(t.startswith('protein') for t in tok_set)
+    return tiene_prot and ('orina' in tok_set)
+
+
+def _estudio_es_proteinuria(estudio_norm: str) -> bool:
+    """Identifica estudios activos del catálogo correspondientes a proteínas en orina."""
+    palabras = [w for w in re.split(r'[\s/()]+', estudio_norm) if w]
+    p_set = set(palabras)
+    if {'reactiva', 'pcr', 'proteinograma', 'alfa', 'totales'} & p_set:
+        return False
+    if 'proteinuria' in p_set:
+        return True
+    return any(w.startswith('protein') for w in palabras) and ('orina' in p_set)
+
+
+def _es_consulta_albuminuria_aislada(tokens: List[str]) -> bool:
+    """Detecta solicitudes de albuminuria / microalbuminuria distintas del cociente RAC/CAC."""
+    if {'rac', 'cac', 'cociente', 'relacion', 'wuite', 'cuite'} & set(tokens):
+        return False
+    if _es_consulta_ratio_alb_creat(tokens):
+        return False
+    tok_set = set(tokens)
+    for t in list(tok_set):
+        tok_set.update(_variantes_ocr_token(t))
+    if tok_set & {'albuminuria', 'microalbuminuria', 'albummna', 'albummua', 'albumimua', 'alburninuria'}:
+        return True
+    return any(len(t) >= 8 and fuzz.ratio(t, 'albuminuria') >= 84.0 for t in tok_set)
+
+
+def _estudio_es_microalbuminuria(estudio_norm: str) -> bool:
+    """Identifica estudios activos de microalbuminuria / albuminuria excluyendo RAC."""
+    if _estudio_es_rac(estudio_norm):
+        return False
+    palabras = [w for w in re.split(r'[\s/()]+', estudio_norm) if w]
+    return any(w in ('microalbuminuria', 'albuminuria') for w in palabras)
 
 
 def _esqueleto_consonantico(palabra: str) -> str:
@@ -304,6 +375,8 @@ class OCRIntegrationService:
     4. Desambiguación contextual por co-ocurrencia.
     5. Sugerencias de estudios frecuentes complementarios.
     """
+
+    DEFAULT_GEMINI_VISION_MODEL = 'gemini-3.6-flash'
 
     @classmethod
     def calcular_similitud_estudio(
@@ -367,6 +440,18 @@ class OCRIntegrationService:
         if es_match_rac:
             max_score = max(max_score, 96.0)
 
+        consulta_proteinuria = _es_consulta_proteinuria(palabras_texto)
+        es_match_proteinuria = consulta_proteinuria and _estudio_es_proteinuria(estudio_norm)
+        if consulta_proteinuria and not es_match_proteinuria and any(w.startswith('protein') for w in palabras_estudio):
+            return 0.0
+        if es_match_proteinuria:
+            max_score = max(max_score, 96.0)
+
+        consulta_albuminuria = _es_consulta_albuminuria_aislada(palabras_texto)
+        es_match_microalb = consulta_albuminuria and _estudio_es_microalbuminuria(estudio_norm)
+        if es_match_microalb:
+            max_score = max(max_score, 96.0)
+
         if estudio_norm in ('lipidograma', 'perfil lipidico') and (
             texto_norm in _MARCADORES_PERFIL_LIPIDICO
             or any(p in _MARCADORES_PERFIL_LIPIDICO for p in palabras_texto)
@@ -385,6 +470,8 @@ class OCRIntegrationService:
             conceptos_todos_tokens.update(c_item.split())
         tiene_calificador_no_solicitado = (
             not es_match_rac
+            and not es_match_proteinuria
+            and not es_match_microalb
             and any(
                 w in _CALIFICADORES_DIFERENCIALES and w not in conceptos_todos_tokens
                 for w in palabras_estudio
@@ -2181,6 +2268,104 @@ class OCRIntegrationService:
             return '', ''
         return m.group(1).lower(), m.group(2).replace('\n', '').replace('\r', '').strip()
 
+    @staticmethod
+    def _limpiar_json_markdown(raw_content: str) -> str:
+        """Elimina posibles fences ```json ... ``` de la respuesta de un LLM."""
+        limpio = str(raw_content or '').strip()
+        if limpio.startswith('```'):
+            limpio = re.sub(r'^```(?:json)?\s*|\s*```$', '', limpio, flags=re.IGNORECASE).strip()
+        return limpio
+
+    @classmethod
+    def _resolver_modelo_gemini(cls) -> str:
+        """Retorna el único modelo Gemini habilitado (gemini-3.6-flash por defecto, sin cascada)."""
+        model_setting = str(
+            getattr(settings, 'OCR_VISION_MODEL', cls.DEFAULT_GEMINI_VISION_MODEL)
+            or cls.DEFAULT_GEMINI_VISION_MODEL
+        ).strip()
+        modelos = [m.strip() for m in model_setting.split(',') if m.strip()]
+        return modelos[0] if modelos else cls.DEFAULT_GEMINI_VISION_MODEL
+
+    @classmethod
+    def _llamar_gemini_vision(cls, parts: List[Dict[str, Any]]) -> Tuple[str, str, str]:
+        """
+        Realiza una única consulta a la API de Gemini usando exclusivamente el modelo configurado
+        (gemini-3.6-flash por defecto), sin fallback a otros modelos.
+        Retorna (raw_content, error_ia, modelo_usado).
+        """
+        modelo_unico = cls._resolver_modelo_gemini()
+        api_key = str(getattr(settings, 'OCR_VISION_API_KEY', '') or '').strip()
+        timeout = float(getattr(settings, 'OCR_VISION_TIMEOUT_SECONDS', 20.0) or 20.0)
+
+        if not api_key:
+            msg = 'No hay clave API configurada para consultar Gemini (OCR_VISION_API_KEY).'
+            logger.warning(msg)
+            return '', msg, modelo_unico
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo_unico}:generateContent?key={api_key}"
+        payload_gemini = {
+            'contents': [{'parts': parts}],
+            'generationConfig': {
+                'temperature': 0.1,
+                'responseMimeType': 'application/json'
+            }
+        }
+
+        try:
+            resp = requests.post(url, json=payload_gemini, timeout=timeout)
+            if resp.status_code in (401, 403):
+                msg = (
+                    f"Gemini ({modelo_unico}) rechazó las credenciales API "
+                    f"(HTTP {resp.status_code}). Verificá OCR_VISION_API_KEY."
+                )
+                logger.warning(msg)
+                return '', msg, modelo_unico
+            if resp.status_code == 429:
+                msg = (
+                    f"Gemini ({modelo_unico}) alcanzó el límite de cuota o solicitudes "
+                    "(HTTP 429). Reintentá en unos instantes o asigná los estudios manualmente."
+                )
+                logger.warning(msg)
+                return '', msg, modelo_unico
+            if resp.status_code == 503:
+                msg = (
+                    f"Gemini ({modelo_unico}) se encuentra temporalmente sobrecargado "
+                    "(HTTP 503). Reintentá en unos segundos."
+                )
+                logger.warning(msg)
+                return '', msg, modelo_unico
+            if resp.status_code == 404:
+                msg = f"El modelo configurado '{modelo_unico}' no está disponible en Gemini (HTTP 404)."
+                logger.warning(msg)
+                return '', msg, modelo_unico
+
+            resp.raise_for_status()
+            body = resp.json()
+            candidates = body.get('candidates') or []
+            raw_content = ''
+            if candidates:
+                c_parts = (candidates[0].get('content') or {}).get('parts') or []
+                if c_parts:
+                    raw_content = str(c_parts[0].get('text') or '')
+            if not raw_content.strip():
+                msg = f"Gemini ({modelo_unico}) devolvió una respuesta vacía."
+                logger.warning(msg)
+                return '', msg, modelo_unico
+            return raw_content, '', modelo_unico
+        except requests.exceptions.Timeout as exc:
+            msg = f"Tiempo de espera agotado al consultar Gemini ({modelo_unico}). Reintentá nuevamente."
+            logger.warning("%s Detalle: %s", msg, exc)
+            return '', msg, modelo_unico
+        except requests.exceptions.RequestException as exc:
+            status_code = getattr(getattr(exc, 'response', None), 'status_code', None)
+            msg = f"No se pudo conectar con Gemini ({modelo_unico}) (HTTP {status_code or 'error de red'})."
+            logger.warning("%s Detalle: %s", msg, exc)
+            return '', msg, modelo_unico
+        except (ValueError, KeyError, TypeError) as exc:
+            msg = f"Gemini ({modelo_unico}) devolvió una respuesta con formato inválido."
+            logger.warning("%s Detalle: %s", msg, exc)
+            return '', msg, modelo_unico
+
     @classmethod
     def _parsear_respuesta_vision_ia(
         cls,
@@ -2188,9 +2373,7 @@ class OCRIntegrationService:
         bloques_validos: List[Tuple[int, str, str, str]]
     ) -> Dict[int, str] | None:
         """Parsea la respuesta JSON de Visión IA y retorna None si viene vacía."""
-        limpio_json = str(raw_content or '').strip()
-        if limpio_json.startswith('```'):
-            limpio_json = re.sub(r'^```(?:json)?\s*|\s*```$', '', limpio_json, flags=re.IGNORECASE).strip()
+        limpio_json = cls._limpiar_json_markdown(raw_content)
         if not limpio_json:
             return None
 
@@ -2230,19 +2413,18 @@ class OCRIntegrationService:
         estudios_activos: List[Estudios]
     ) -> Dict[int, str]:
         """
-        Asistente híbrido gratuito opcional (Gemini Flash / Groq / Ollama) que interpreta recortes
+        Asistente híbrido opcional (Gemini 3.6 Flash / Groq / Ollama) que interpreta recortes
         manuscritos cursivos cuando la memoria local y PaddleOCR no alcanzan certeza suficiente.
-        Para Gemini aplica cascada automática de modelos fallback ante 503/429/404/Timeout.
-        Nunca lanza excepciones: ante falta de API key, timeout o error retorna {}.
+        Para Gemini consulta únicamente el modelo configurado (gemini-3.6-flash) sin fallbacks.
         """
         if not recortes_dudosos:
             return {}
 
         provider = str(getattr(settings, 'OCR_VISION_PROVIDER', 'gemini') or 'gemini').strip().lower()
         api_key = str(getattr(settings, 'OCR_VISION_API_KEY', '') or '').strip()
-        model_setting = str(getattr(settings, 'OCR_VISION_MODEL', 'gemini-3.8-flash') or 'gemini-3.8-flash').strip()
+        model_setting = cls._resolver_modelo_gemini()
         ollama_url = str(getattr(settings, 'OCR_VISION_OLLAMA_URL', 'http://localhost:11434') or 'http://localhost:11434').strip()
-        timeout = float(getattr(settings, 'OCR_VISION_TIMEOUT_SECONDS', 4.0) or 4.0)
+        timeout = float(getattr(settings, 'OCR_VISION_TIMEOUT_SECONDS', 20.0) or 20.0)
 
         if provider in ('gemini', 'groq') and not api_key:
             return {}
@@ -2256,7 +2438,7 @@ class OCRIntegrationService:
         if not bloques_validos:
             return {}
 
-        catalogo_nombres = [est.nombre for est in estudios_activos[:200] if est and est.nombre]
+        catalogo_nombres = [est.nombre for est in estudios_activos if est and est.nombre]
         prompt = (
             "Eres un asistente bioquímico experto en leer órdenes médicas manuscritas en cursiva en español. "
             "Para cada imagen de recorte numerada por 'indice', transcribe literalmente qué dice el papel ('texto') "
@@ -2267,86 +2449,22 @@ class OCRIntegrationService:
         )
 
         if provider == 'gemini':
-            fallback_models = [
-                'gemini-3.8-flash',
-                'gemini-3.6-flash',
-                'gemini-3.5-flash',
-                'gemini-3.5-flash-lite',
-                'gemini-flash-lite-latest',
-                'gemini-3.1-flash-lite',
-            ]
-            modelos_candidatos = list(dict.fromkeys(
-                [m.strip() for m in model_setting.split(',') if m.strip()] + fallback_models
-            ))
-
             parts: List[Dict[str, Any]] = [{'text': prompt}]
             for idx, raw_t, mime_t, b64 in bloques_validos:
                 parts.append({'text': f"Bloque indice {idx} (OCR previo: '{raw_t}'):"})
                 parts.append({'inline_data': {'mime_type': mime_t, 'data': b64}})
 
-            payload_gemini = {
-                'contents': [{'parts': parts}],
-                'generationConfig': {
-                    'temperature': 0.1,
-                    'responseMimeType': 'application/json'
-                }
-            }
+            raw_content, error_ia, _ = cls._llamar_gemini_vision(parts)
+            if error_ia or not raw_content:
+                return {}
+            try:
+                salida = cls._parsear_respuesta_vision_ia(raw_content, bloques_validos)
+                return salida if salida is not None else {}
+            except (ValueError, KeyError, TypeError) as exc:
+                logger.warning("Respuesta JSON inválida en Gemini '%s': %s", model_setting, exc)
+                return {}
 
-            for modelo_candidato in modelos_candidatos:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo_candidato}:generateContent?key={api_key}"
-                try:
-                    resp = requests.post(url, json=payload_gemini, timeout=timeout)
-                    if resp.status_code in (503, 429, 404):
-                        logger.warning(
-                            "Asistente Gemini modelo '%s' respondió HTTP %s; intentando siguiente modelo fallback.",
-                            modelo_candidato,
-                            resp.status_code
-                        )
-                        continue
-                    resp.raise_for_status()
-                    body = resp.json()
-                    candidates = body.get('candidates') or []
-                    raw_content = ''
-                    if candidates:
-                        c_parts = (candidates[0].get('content') or {}).get('parts') or []
-                        if c_parts:
-                            raw_content = str(c_parts[0].get('text') or '')
-                    salida = cls._parsear_respuesta_vision_ia(raw_content, bloques_validos)
-                    if salida is not None:
-                        return salida
-                    logger.warning(
-                        "Asistente Gemini modelo '%s' devolvió respuesta vacía; intentando siguiente modelo fallback.",
-                        modelo_candidato
-                    )
-                except requests.exceptions.Timeout as exc:
-                    logger.warning(
-                        "Timeout consultando Gemini modelo '%s': %s; intentando siguiente modelo fallback.",
-                        modelo_candidato,
-                        exc
-                    )
-                    continue
-                except requests.exceptions.RequestException as exc:
-                    status_code = getattr(getattr(exc, 'response', None), 'status_code', None)
-                    if status_code in (401, 403):
-                        logger.warning("Gemini rechazó credenciales (HTTP %s) en modelo '%s': %s", status_code, modelo_candidato, exc)
-                        return {}
-                    logger.warning(
-                        "Error de red/HTTP (%s) en Gemini modelo '%s': %s; intentando siguiente modelo fallback.",
-                        status_code or 'RequestException',
-                        modelo_candidato,
-                        exc
-                    )
-                    continue
-                except (ValueError, KeyError, TypeError) as exc:
-                    logger.warning(
-                        "Respuesta JSON inválida en Gemini modelo '%s': %s; intentando siguiente modelo fallback.",
-                        modelo_candidato,
-                        exc
-                    )
-                    continue
-            return {}
-
-        model = ([m.strip() for m in model_setting.split(',') if m.strip()] or [model_setting])[0]
+        model = model_setting
         raw_content = ''
         try:
             if provider == 'groq':
@@ -2675,6 +2793,282 @@ class OCRIntegrationService:
             })
 
         return resultados
+
+    @staticmethod
+    def _serializar_estudio_ia(
+        estudio: Estudios,
+        score: float,
+        texto_origen: str,
+    ) -> Dict[str, Any]:
+        """Serializa un estudio resuelto por Visión IA manteniendo el contrato de recomendación."""
+        return {
+            'id_estudio': estudio.id,
+            'codigo_practica': estudio.codigo_practica,
+            'nombre': estudio.nombre,
+            'tipo_muestra': estudio.tipo_muestra,
+            'similitud_score': round(float(score), 2),
+            'texto_detectado_origen': texto_origen,
+            'origen_deteccion': 'VISION_IA',
+            'preseleccionado': False,
+            'veces_confirmado': 0,
+            'imagen_muestra': '',
+        }
+
+    @classmethod
+    def interpretar_receta_contextual(
+        cls,
+        imagen_contextual: str,
+        contexto_renglones: Optional[List[Dict[str, Any]]] = None,
+        umbral_similitud: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Interpreta en contexto completo la imagen única saneada de la receta (diagnóstico presuntivo +
+        lista manuscrita + indicaciones de muestra, con datos filiatorios y firma tapados/recortados)
+        usando exclusivamente gemini-3.6-flash sin fallbacks.
+        """
+        modelo_unico = cls._resolver_modelo_gemini()
+        mime_type, b64_data = cls._extraer_mime_y_base64(imagen_contextual)
+        if not mime_type or not b64_data:
+            return {
+                'resultados': [],
+                'renglones_nuevos': [],
+                'diagnostico_detectado': '',
+                'notas_muestra': '',
+                'modelo_usado': modelo_unico,
+                'error_ia': 'La imagen contextual enviada no tiene un formato DataURL válido.',
+            }
+
+        provider = str(getattr(settings, 'OCR_VISION_PROVIDER', 'gemini') or 'gemini').strip().lower()
+        if provider != 'gemini':
+            return {
+                'resultados': [],
+                'renglones_nuevos': [],
+                'diagnostico_detectado': '',
+                'notas_muestra': '',
+                'modelo_usado': modelo_unico,
+                'error_ia': f"Proveedor IA '{provider}' no compatible con lectura contextual; debe configurarse 'gemini'.",
+            }
+
+        if umbral_similitud is None:
+            umbral_similitud = getattr(settings, 'OCR_SIMILARITY_THRESHOLD', 75)
+
+        (
+            patrones_activos,
+            textos_descartados_globales,
+            pares_descartados,
+            alias_activos,
+            estudios_activos,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+        ) = cls._cargar_contexto_mapeo()
+
+        catalogo_nombres = [est.nombre for est in estudios_activos if est and est.nombre]
+        catalogo_por_norm: Dict[str, Estudios] = {
+            normalizar_texto_clinico(est.nombre): est
+            for est in estudios_activos
+            if est and est.nombre and normalizar_texto_clinico(est.nombre)
+        }
+
+        contexto_map: Dict[int, str] = {}
+        contexto_lineas_txt: List[str] = []
+        for item in (contexto_renglones or []):
+            if not isinstance(item, dict):
+                continue
+            idx_raw = item.get('indice')
+            if idx_raw is None or isinstance(idx_raw, bool) or not str(idx_raw).isdigit():
+                continue
+            idx_int = int(idx_raw)
+            txt_ocr = str(item.get('texto_ocr') or '[Manuscrito a revisar]').strip()
+            contexto_map[idx_int] = txt_ocr
+            contexto_lineas_txt.append(f"- indice {idx_int}: '{txt_ocr}'")
+
+        contexto_bloque = (
+            "Renglones detectados previamente por OCR local (úsalos solo como guía de índices; "
+            "pueden contener errores o haber omitido líneas como el primer renglón):\n"
+            + "\n".join(contexto_lineas_txt)
+            if contexto_lineas_txt
+            else "No hubo renglones previos del OCR local; devuelve todos los estudios con 'indice_renglon': null."
+        )
+
+        prompt = (
+            "Eres un bioquímico experto en interpretar órdenes médicas manuscritas en cursiva en español en Argentina. "
+            "Observas la zona clínica saneada de una receta médica (sin datos personales ni firma). "
+            "Lee todo en contexto de arriba hacia abajo antes de responder: "
+            "1) 'diagnostico_detectado': diagnóstico presuntivo o motivo clínico si figura (ej. 'baja masa nefronal'). "
+            "2) 'notas_muestra': indicaciones de muestra que aplican a los estudios (ej. 'orina muestra aislada', 'orina 24hs', 'en suero'). "
+            "3) 'estudios': lista exhaustiva de TODOS los estudios solicitados de arriba hacia abajo sin omitir el primero ni trazos bajo sombra. "
+            "Para cada estudio indica 'indice_renglon' (el entero correspondiente de la guía si coincide con un renglón previo, o null si fue omitido), "
+            "'texto_manuscrito' (transcripción literal de la orden, ej. 'proteinuria') y 'estudios_catalogo' (lista de nombres EXACTOS del catálogo activo que corresponden al pedido según el contexto completo). "
+            f"{contexto_bloque}\n"
+            f"Catálogo activo completo: {', '.join(catalogo_nombres)}.\n"
+            "Responde ÚNICAMENTE JSON válido con este formato exacto: "
+            '{"diagnostico_detectado": "<texto o vacio>", "notas_muestra": "<texto o vacio>", '
+            '"estudios": [{"indice_renglon": <int o null>, "texto_manuscrito": "<texto>", "estudios_catalogo": ["<nombre exacto del catalogo>"]}]}'
+        )
+
+        parts: List[Dict[str, Any]] = [
+            {'text': prompt},
+            {'inline_data': {'mime_type': mime_type, 'data': b64_data}},
+        ]
+
+        raw_content, error_ia, modelo_usado = cls._llamar_gemini_vision(parts)
+        if error_ia:
+            return {
+                'resultados': [],
+                'renglones_nuevos': [],
+                'diagnostico_detectado': '',
+                'notas_muestra': '',
+                'modelo_usado': modelo_usado,
+                'error_ia': error_ia,
+            }
+
+        try:
+            parsed = json.loads(cls._limpiar_json_markdown(raw_content))
+        except (ValueError, KeyError, TypeError) as exc:
+            logger.warning("Gemini (%s) devolvió JSON inválido en modo contextual: %s", modelo_usado, exc)
+            return {
+                'resultados': [],
+                'renglones_nuevos': [],
+                'diagnostico_detectado': '',
+                'notas_muestra': '',
+                'modelo_usado': modelo_usado,
+                'error_ia': f"Gemini ({modelo_usado}) devolvió una respuesta con formato inesperado.",
+            }
+
+        if isinstance(parsed, dict):
+            diagnostico_detectado = str(parsed.get('diagnostico_detectado') or '').strip()
+            notas_muestra = str(parsed.get('notas_muestra') or '').strip()
+            estudios_items = parsed.get('estudios')
+            if not isinstance(estudios_items, list):
+                estudios_items = parsed.get('resultados') if isinstance(parsed.get('resultados'), list) else []
+        elif isinstance(parsed, list):
+            diagnostico_detectado = ''
+            notas_muestra = ''
+            estudios_items = parsed
+        else:
+            estudios_items = []
+            diagnostico_detectado = ''
+            notas_muestra = ''
+
+        resultados_por_idx: Dict[int, Dict[str, Any]] = {}
+        renglones_nuevos: List[Dict[str, Any]] = []
+
+        for entry in estudios_items:
+            if not isinstance(entry, dict):
+                continue
+
+            texto_man = str(entry.get('texto_manuscrito') or entry.get('texto') or '').strip()
+            cat_list = entry.get('estudios_catalogo')
+            recs_por_id: Dict[int, Dict[str, Any]] = {}
+            no_exactos: List[str] = []
+
+            if isinstance(cat_list, list):
+                for cat_raw in cat_list:
+                    cat_str = str(cat_raw or '').strip()
+                    cat_norm = normalizar_texto_clinico(cat_str)
+                    if not cat_norm:
+                        continue
+                    est_exacto = catalogo_por_norm.get(cat_norm)
+                    if est_exacto:
+                        recs_por_id[est_exacto.id] = cls._serializar_estudio_ia(
+                            est_exacto,
+                            95.0,
+                            texto_man or cat_str,
+                        )
+                    else:
+                        no_exactos.append(cat_str)
+
+            combo_item = None
+            partes_fallback: List[str] = []
+            if texto_man:
+                partes_fallback.append(texto_man)
+            partes_fallback.extend(no_exactos)
+
+            if (not recs_por_id or no_exactos) and partes_fallback:
+                eval_txt = ' ; '.join(partes_fallback)
+                eval_res = cls.evaluar_renglon_individual(
+                    indice=0,
+                    raw_texto=eval_txt,
+                    patrones_activos=patrones_activos,
+                    alias_activos=alias_activos,
+                    estudios_activos=estudios_activos,
+                    textos_descartados_globales=textos_descartados_globales,
+                    pares_descartados=pares_descartados,
+                    umbral_similitud=float(umbral_similitud),
+                )
+                combo_item = eval_res.get('combo_detectado')
+                for rec in eval_res.get('recomendados', []):
+                    eid = rec['id_estudio']
+                    cand_copy = dict(rec)
+                    cand_copy['origen_deteccion'] = 'VISION_IA'
+                    cand_copy['preseleccionado'] = False
+                    if eid not in recs_por_id or cand_copy.get('similitud_score', 0.0) > recs_por_id[eid]['similitud_score']:
+                        recs_por_id[eid] = cand_copy
+
+            entry_recs = sorted(
+                recs_por_id.values(),
+                key=lambda r: r.get('similitud_score', 0.0),
+                reverse=True,
+            )
+
+            idx_raw = entry.get('indice_renglon', entry.get('indice'))
+            idx_val: Optional[int] = None
+            if idx_raw is not None and not isinstance(idx_raw, bool):
+                idx_str = str(idx_raw).strip()
+                if idx_str.isdigit():
+                    candidate_idx = int(idx_str)
+                    if candidate_idx in contexto_map:
+                        idx_val = candidate_idx
+
+            if idx_val is not None:
+                prev = resultados_por_idx.get(idx_val)
+                if prev is None:
+                    resultados_por_idx[idx_val] = {
+                        'indice': idx_val,
+                        'texto_ocr_original': contexto_map[idx_val],
+                        'texto_transcrito_ia': texto_man,
+                        'combo_detectado': combo_item,
+                        'recomendados': entry_recs,
+                    }
+                else:
+                    if texto_man and texto_man not in prev['texto_transcrito_ia']:
+                        prev['texto_transcrito_ia'] = (
+                            f"{prev['texto_transcrito_ia']} / {texto_man}".strip(' /')
+                        )
+                    merged = {r['id_estudio']: r for r in prev['recomendados']}
+                    for r in entry_recs:
+                        eid = r['id_estudio']
+                        if eid not in merged or r['similitud_score'] > merged[eid]['similitud_score']:
+                            merged[eid] = r
+                    prev['recomendados'] = sorted(
+                        merged.values(),
+                        key=lambda r: r.get('similitud_score', 0.0),
+                        reverse=True,
+                    )
+                    if combo_item and not prev.get('combo_detectado'):
+                        prev['combo_detectado'] = combo_item
+            elif entry_recs or len(texto_man) >= 2:
+                renglones_nuevos.append({
+                    'indice': None,
+                    'texto_ocr_original': '',
+                    'texto_transcrito_ia': texto_man,
+                    'combo_detectado': combo_item,
+                    'recomendados': entry_recs,
+                })
+
+        resultados = [resultados_por_idx[idx] for idx in sorted(resultados_por_idx.keys())]
+        return {
+            'resultados': resultados,
+            'renglones_nuevos': renglones_nuevos,
+            'diagnostico_detectado': diagnostico_detectado,
+            'notas_muestra': notas_muestra,
+            'modelo_usado': modelo_usado,
+            'error_ia': '',
+        }
 
     @classmethod
     def mapear_textos_con_estudios(
