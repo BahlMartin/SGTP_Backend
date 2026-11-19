@@ -488,6 +488,11 @@ class OCRIntegrationService:
         imagenes_muestra_conocidas: List[str] = []
         imagenes_muestra_vistas: Set[str] = set()
         trazos_coincidentes: List[Dict[str, Any]] = []
+        recorte_ids_en_trazos: Set[int] = set()
+        imagenes_en_trazos: Set[str] = set()
+        imagenes_secundarias: Dict[str, Tuple[List[int], float]] = {}
+        neg_map = negativos_por_recorte or {}
+        neg_preps_por_fb_id: Dict[int, Any] = {}
 
         def _agregar_imagen_muestra(img_str: Any) -> None:
             if not isinstance(img_str, str):
@@ -497,6 +502,73 @@ class OCRIntegrationService:
                 return
             imagenes_muestra_vistas.add(limpia)
             imagenes_muestra_conocidas.append(limpia)
+
+        def _registrar_imagen_secundaria(
+            img_str: Any,
+            est_ids: List[int],
+            score_val: float,
+        ) -> None:
+            if not isinstance(img_str, str):
+                return
+            limpia = img_str.strip()
+            if not limpia or limpia in imagenes_en_trazos:
+                return
+            ids_validos = [eid for eid in est_ids if eid in estudios_por_id]
+            if not ids_validos:
+                return
+            prev = imagenes_secundarias.get(limpia)
+            if prev is None:
+                imagenes_secundarias[limpia] = (list(dict.fromkeys(ids_validos)), float(score_val))
+            else:
+                merged_ids = list(dict.fromkeys(prev[0] + ids_validos))
+                imagenes_secundarias[limpia] = (merged_ids, max(prev[1], float(score_val)))
+
+        def _asegurar_negativos_hidratados(rec_ids_objetivo: List[int]) -> None:
+            if not (query_crop is not None) or not neg_map or not rec_ids_objetivo:
+                return
+            fb_ids_a_hidratar: List[Tuple[int, str]] = []
+            for rid in rec_ids_objetivo:
+                for fb_id, firma_v in neg_map.get(rid, []):
+                    if fb_id in neg_preps_por_fb_id:
+                        continue
+                    cache_key = ('fb_neg', fb_id, firma_v)
+                    if VisualMatcherService.tiene_en_cache(cache_key):
+                        neg_preps_por_fb_id[fb_id] = VisualMatcherService.obtener_en_cache(cache_key)
+                    else:
+                        fb_ids_a_hidratar.append((fb_id, firma_v))
+            if not fb_ids_a_hidratar:
+                return
+            ids_fb_faltantes = list(dict.fromkeys(fb_id for fb_id, _ in fb_ids_a_hidratar))
+            imgs_neg_por_id = dict(
+                FeedbackComparacionTrazo.objects
+                .filter(id__in=ids_fb_faltantes)
+                .values_list('id', 'imagen_consulta')
+            )
+            for fb_id, firma_v in fb_ids_a_hidratar:
+                if fb_id in neg_preps_por_fb_id:
+                    continue
+                cache_key = ('fb_neg', fb_id, firma_v)
+                neg_preps_por_fb_id[fb_id] = VisualMatcherService.obtener_o_preparar(
+                    cache_key,
+                    imgs_neg_por_id.get(fb_id, '') or '',
+                )
+
+        def _calcular_max_sim_neg(rid: int) -> float:
+            max_sim = 0.0
+            for fb_id, firma_neg in neg_map.get(rid, []):
+                sim_neg = 0.0
+                prep_neg = neg_preps_por_fb_id.get(fb_id) if query_crop is not None else None
+                if query_crop is not None and prep_neg is not None:
+                    sim_neg = VisualMatcherService.comparar_preparados(
+                        query_crop,
+                        prep_neg,
+                        pesos=pesos_visuales,
+                    )
+                elif firma_norm and firma_neg:
+                    sim_neg = cls.calcular_similitud_visual(firma_norm, firma_neg)
+                if sim_neg > max_sim:
+                    max_sim = sim_neg
+            return max_sim
 
         def _registrar_candidato(
             estudio: Estudios,
@@ -637,34 +709,13 @@ class OCRIntegrationService:
                             votos_neg,
                         ))
 
-                neg_map = negativos_por_recorte or {}
-                neg_preps_por_fb_id: Dict[int, Any] = {}
                 if usando_imagen_real and neg_map and pares_evaluados:
-                    fb_ids_a_hidratar: List[Tuple[int, str]] = []
-                    for rec_id, _, _, sv_base, _, _, _ in pares_evaluados:
-                        if sv_base < (umbral_coincidencia - 5.0):
-                            continue
-                        for fb_id, firma_v in neg_map.get(rec_id, []):
-                            cache_key = ('fb_neg', fb_id, firma_v)
-                            if VisualMatcherService.tiene_en_cache(cache_key):
-                                neg_preps_por_fb_id[fb_id] = VisualMatcherService.obtener_en_cache(cache_key)
-                            else:
-                                fb_ids_a_hidratar.append((fb_id, firma_v))
-                    if fb_ids_a_hidratar:
-                        ids_fb_faltantes = list(dict.fromkeys(fb_id for fb_id, _ in fb_ids_a_hidratar))
-                        imgs_neg_por_id = dict(
-                            FeedbackComparacionTrazo.objects
-                            .filter(id__in=ids_fb_faltantes)
-                            .values_list('id', 'imagen_consulta')
-                        )
-                        for fb_id, firma_v in fb_ids_a_hidratar:
-                            if fb_id in neg_preps_por_fb_id:
-                                continue
-                            cache_key = ('fb_neg', fb_id, firma_v)
-                            neg_preps_por_fb_id[fb_id] = VisualMatcherService.obtener_o_preparar(
-                                cache_key,
-                                imgs_neg_por_id.get(fb_id, '') or '',
-                            )
+                    rec_ids_hidratar = [
+                        rec_id
+                        for rec_id, _, _, sv_base, _, _, _ in pares_evaluados
+                        if sv_base >= (umbral_coincidencia - 5.0)
+                    ]
+                    _asegurar_negativos_hidratados(rec_ids_hidratar)
 
                 umbral_boost = 76.0 if usando_imagen_real else 78.0
                 for rec_id, texto_det_norm, est_ids_validos, sv_base, metricas_cv, votos_pos, votos_neg in pares_evaluados:
@@ -692,20 +743,7 @@ class OCRIntegrationService:
                     ajuste_rep, peso_voto = cls._calcular_ajuste_reputacion(votos_pos, votos_neg)
                     sv = sv + ajuste_rep
 
-                    max_sim_neg = 0.0
-                    for fb_id, firma_neg in neg_map.get(rec_id, []):
-                        sim_neg = 0.0
-                        prep_neg = neg_preps_por_fb_id.get(fb_id) if usando_imagen_real else None
-                        if usando_imagen_real and query_crop is not None and prep_neg is not None:
-                            sim_neg = VisualMatcherService.comparar_preparados(
-                                query_crop,
-                                prep_neg,
-                                pesos=pesos_visuales,
-                            )
-                        elif firma_norm and firma_neg:
-                            sim_neg = cls.calcular_similitud_visual(firma_norm, firma_neg)
-                        if sim_neg > max_sim_neg:
-                            max_sim_neg = sim_neg
+                    max_sim_neg = _calcular_max_sim_neg(rec_id)
 
                     if max_sim_neg >= 78.0:
                         penalizacion_neg = round(
@@ -761,6 +799,9 @@ class OCRIntegrationService:
                 )
                 for rec_id, sv_item, score_base_item, est_ids_item, metricas_item in recortes_coincidentes_detallados:
                     img_rec = (imagenes_por_rec_id.get(rec_id) or '').strip()
+                    recorte_ids_en_trazos.add(rec_id)
+                    if img_rec:
+                        imagenes_en_trazos.add(img_rec)
                     trazos_coincidentes.append({
                         'recorte_id': rec_id,
                         'imagen_muestra': img_rec,
@@ -887,7 +928,11 @@ class OCRIntegrationService:
                         continue
                     cache_key = ('patron', patron.id, len(img_patron), img_patron[-24:])
                     cand_patron = VisualMatcherService.obtener_o_preparar(cache_key, img_patron)
-                    sv = VisualMatcherService.comparar_preparados(query_crop, cand_patron)
+                    sv = VisualMatcherService.comparar_preparados(
+                        query_crop,
+                        cand_patron,
+                        pesos=pesos_visuales,
+                    )
                 else:
                     vhash_patron = cls._extraer_vhash(img_patron)
                     if not vhash_patron:
@@ -902,10 +947,19 @@ class OCRIntegrationService:
 
         if patron_combo:
             combo_detectado = patron_combo.nombre_perfil
+            est_ids_combo_validos = [
+                est_id for est_id in (patron_combo.estudios_ids or [])
+                if est_id in estudios_por_id and (texto_norm, est_id) not in pares_descartados
+            ]
             if patron_combo.imagen_muestra:
                 _agregar_imagen_muestra(patron_combo.imagen_muestra)
                 if not imagen_muestra_conocida:
                     imagen_muestra_conocida = patron_combo.imagen_muestra
+                _registrar_imagen_secundaria(
+                    patron_combo.imagen_muestra,
+                    est_ids_combo_validos,
+                    score_combo,
+                )
             for est_id in (patron_combo.estudios_ids or []):
                 est = estudios_por_id.get(est_id)
                 if est and (texto_norm, est.id) not in pares_descartados:
@@ -941,7 +995,11 @@ class OCRIntegrationService:
                     return 0.0
                 cache_key = ('alias', alias_obj.id, len(img_alias_src), img_alias_src[-24:])
                 cand_alias = VisualMatcherService.obtener_o_preparar(cache_key, img_alias_src)
-                return VisualMatcherService.comparar_preparados(query_crop, cand_alias)
+                return VisualMatcherService.comparar_preparados(
+                    query_crop,
+                    cand_alias,
+                    pesos=pesos_visuales,
+                )
             if firma_norm:
                 vhash_alias = cls._extraer_vhash(img_alias_src) or cls._extraer_vhash(alias_obj.texto_patron)
                 if vhash_alias:
@@ -982,6 +1040,7 @@ class OCRIntegrationService:
                         _agregar_imagen_muestra(img_alias)
                         if not imagen_muestra_conocida:
                             imagen_muestra_conocida = img_alias
+                        _registrar_imagen_secundaria(img_alias, [estudio.id], score_alias)
                     _registrar_candidato(
                         estudio=estudio,
                         score=score_alias,
@@ -1006,6 +1065,7 @@ class OCRIntegrationService:
                         _agregar_imagen_muestra(img_alias)
                         if not imagen_muestra_conocida:
                             imagen_muestra_conocida = img_alias
+                        _registrar_imagen_secundaria(img_alias, [estudio.id], round(score_visual, 2))
                     _registrar_candidato(
                         estudio=estudio,
                         score=round(score_visual, 2),
@@ -1065,6 +1125,99 @@ class OCRIntegrationService:
         preseleccionados = [c for c in candidatos if c['preseleccionado']]
         alternativos = [c for c in candidatos if not c['preseleccionado'] and c['similitud_score'] >= 55.0][:3]
         recomendados = preseleccionados + alternativos
+
+        # Resolver imágenes históricas de Pasos 1/2 contra RecorteImagenEstudio para habilitar votación Bien/Mal
+        if imagenes_secundarias:
+            rec_sec_rows = list(
+                RecorteImagenEstudio.objects
+                .filter(es_descarte=False, imagen_muestra__in=list(imagenes_secundarias.keys()))
+                .order_by('-fecha_registro', '-id')
+                .values_list('id', 'firma_visual', 'imagen_muestra', 'votos_positivos', 'votos_negativos')
+            )
+            por_img_sec: Dict[str, Tuple[int, str, str, int, int]] = {}
+            for rec_id, fv, img_val, v_pos, v_neg in rec_sec_rows:
+                img_clean = (img_val or '').strip()
+                if not img_clean or img_clean in imagenes_en_trazos or img_clean in por_img_sec:
+                    continue
+                if rec_id in recorte_ids_en_trazos:
+                    continue
+                por_img_sec[img_clean] = (rec_id, fv or '', img_clean, int(v_pos or 0), int(v_neg or 0))
+
+            if por_img_sec:
+                rec_ids_sec = [row[0] for row in por_img_sec.values()]
+                estudios_por_rec_sec: Dict[int, List[int]] = {}
+                for r_id, e_id in RecorteEstudio.objects.filter(recorte_id__in=rec_ids_sec).values_list('recorte_id', 'estudio_id'):
+                    estudios_por_rec_sec.setdefault(r_id, []).append(e_id)
+
+                _asegurar_negativos_hidratados(rec_ids_sec)
+
+                for img_sec, (rec_id, fv, _, v_pos, v_neg) in por_img_sec.items():
+                    fallback_ids, score_fallback = imagenes_secundarias[img_sec]
+                    linked_ids = estudios_por_rec_sec.get(rec_id, [])
+                    est_ids_sec = [
+                        eid for eid in linked_ids
+                        if eid in estudios_por_id and (texto_norm, eid) not in pares_descartados
+                    ]
+                    if not est_ids_sec:
+                        est_ids_sec = [eid for eid in fallback_ids if eid in estudios_por_id]
+                    if not est_ids_sec:
+                        continue
+
+                    ajuste_rep, _ = cls._calcular_ajuste_reputacion(v_pos, v_neg)
+                    metricas_sec: Dict[str, float] = {}
+
+                    if usando_imagen_real and query_crop is not None:
+                        prep_sec = VisualMatcherService.obtener_o_preparar(
+                            ('recorte', rec_id, fv),
+                            img_sec,
+                        )
+                        cv_score, metricas_sec = VisualMatcherService.comparar_preparados_detallado(
+                            query_crop,
+                            prep_sec,
+                            pesos=pesos_visuales,
+                        )
+                        score_base_sec = round(float(cv_score), 2)
+                        sv_sec = float(cv_score) + ajuste_rep
+                        max_sim_neg = _calcular_max_sim_neg(rec_id)
+                        if max_sim_neg >= 78.0:
+                            penalizacion_neg = round(
+                                min(22.0, 8.0 + ((max_sim_neg - 78.0) / 22.0) * 14.0),
+                                2,
+                            )
+                            sv_sec -= penalizacion_neg
+                    elif firma_norm and fv:
+                        v_score = cls.calcular_similitud_visual(firma_norm, fv)
+                        score_base_sec = round(float(v_score), 2)
+                        sv_sec = float(v_score) + ajuste_rep
+                        max_sim_neg = _calcular_max_sim_neg(rec_id)
+                        if max_sim_neg >= 78.0:
+                            penalizacion_neg = round(
+                                min(22.0, 8.0 + ((max_sim_neg - 78.0) / 22.0) * 14.0),
+                                2,
+                            )
+                            sv_sec -= penalizacion_neg
+                    else:
+                        score_base_sec = round(float(score_fallback), 2)
+                        sv_sec = float(score_base_sec) + ajuste_rep
+
+                    sv_sec = round(max(0.0, min(100.0, sv_sec)), 2)
+                    recorte_ids_en_trazos.add(rec_id)
+                    imagenes_en_trazos.add(img_sec)
+                    trazos_coincidentes.append({
+                        'recorte_id': rec_id,
+                        'imagen_muestra': img_sec,
+                        'estudios_ids': list(est_ids_sec),
+                        'estudios_nombres': [
+                            estudios_por_id[eid].nombre
+                            for eid in est_ids_sec
+                            if eid in estudios_por_id
+                        ],
+                        'similitud_score': sv_sec,
+                        'score_base': score_base_sec,
+                        'metricas': dict(metricas_sec) if metricas_sec else {},
+                    })
+
+                trazos_coincidentes.sort(key=lambda item: item['similitud_score'], reverse=True)
 
         return {
             'indice': indice,

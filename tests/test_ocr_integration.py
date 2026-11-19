@@ -1526,6 +1526,140 @@ class OCRIntegrationTestCase(TestCase):
         self.assertEqual(evento_3.metadata.get('trazos_evaluados_mal'), 1)
         self.assertTrue(evento_3.metadata.get('pesos_calibrados'))
 
+    def test_alias_resuelto_a_recorte_historico_expone_trazos_coincidentes_votables(self):
+        """Valida que coincidencias vía alias (Paso 2) resuelvan a RecorteImagenEstudio en trazos_coincidentes."""
+        VisualMatcherService.limpiar_cache()
+        client = self._crear_cliente_ocr(email='alias_trazo@hospital.local', dni=99110006)
+
+        crop_gluc_saved = self._build_handwritten_webp('Glucemia Basal', thickness=2, scale=1.0)
+        crop_gluc_other = self._build_handwritten_webp('Gluc', thickness=3, scale=1.15, tilt=0.22)
+
+        fb_setup = client.post(
+            '/app/ocr/retroalimentar/',
+            {
+                'renglones_confirmados': [
+                    {
+                        'texto': 'Glucemia',
+                        'estudios_ids': [self.estudio_glucemia.id],
+                        'imagen_muestra': crop_gluc_saved,
+                    }
+                ]
+            },
+            format='json',
+        )
+        self.assertEqual(fb_setup.status_code, status.HTTP_200_OK)
+        rec_saved = RecorteImagenEstudio.objects.get(imagen_muestra=crop_gluc_saved)
+
+        # La imagen crop_gluc_other ('Gluc') es visualmente muy distinta (< 80% Paso 0),
+        # pero el texto 'Glucemia' dispara el alias aprendido en el Paso 2.
+        scan_resp = client.post(
+            '/app/ocr/escanear-receta/',
+            {
+                'textos': ['Glucemia'],
+                'firmas_visuales': [''],
+                'recortes_imagen': [crop_gluc_other],
+            },
+            format='json',
+        )
+        self.assertEqual(scan_resp.status_code, status.HTTP_200_OK)
+        renglon = scan_resp.json()['renglones'][0]
+        trazos = renglon['trazos_coincidentes']
+
+        self.assertGreaterEqual(len(trazos), 1)
+        trazo_resuelto = next((t for t in trazos if t['recorte_id'] == rec_saved.id), None)
+        self.assertIsNotNone(trazo_resuelto)
+        self.assertEqual(trazo_resuelto['estudios_ids'], [self.estudio_glucemia.id])
+        self.assertEqual(trazo_resuelto['estudios_nombres'], [self.estudio_glucemia.nombre])
+        self.assertIsInstance(trazo_resuelto['similitud_score'], float)
+        self.assertIsInstance(trazo_resuelto['score_base'], float)
+        self.assertIsInstance(trazo_resuelto['metricas'], dict)
+
+        # Votar Mal usando el recorte_id devuelto en trazos_coincidentes
+        fb_mal = client.post(
+            '/app/ocr/retroalimentar/',
+            {
+                'evaluaciones_trazos': [
+                    {
+                        'recorte_id': trazo_resuelto['recorte_id'],
+                        'es_correcto': False,
+                        'texto_consulta': 'Glucemia',
+                        'imagen_consulta': crop_gluc_other,
+                        'estudios_confirmados_ids': [],
+                        'score_base': trazo_resuelto['score_base'],
+                        'metricas': trazo_resuelto['metricas'],
+                    }
+                ]
+            },
+            format='json',
+        )
+        self.assertEqual(fb_mal.status_code, status.HTTP_200_OK)
+        self.assertEqual(fb_mal.json()['trazos_evaluados_mal'], 1)
+        rec_saved.refresh_from_db()
+        self.assertEqual(rec_saved.votos_negativos, 1)
+        self.assertTrue(
+            FeedbackComparacionTrazo.objects.filter(recorte_historico=rec_saved, es_correcto=False).exists()
+        )
+
+    def test_migracion_0021_backfill_recortes_historicos_idempotente(self):
+        """Valida que la migración 0021 migre alias y combos legados a RecorteImagenEstudio sin duplicar."""
+        import importlib
+        from django.apps import apps
+
+        VisualMatcherService.limpiar_cache()
+        client = self._crear_cliente_ocr(email='backfill_0021@hospital.local', dni=99110007)
+
+        crop_legacy_alias = self._build_handwritten_webp('Orina Especial X1', thickness=2, scale=1.0)
+        crop_legacy_combo = self._build_handwritten_webp('Chequeo Prequirurgico Z2', thickness=2, scale=1.0)
+
+        EstudioAliasAprendido.objects.create(
+            texto_patron='orina especial x1',
+            estudio=self.estudio_orina,
+            veces_confirmado=2,
+            confianza_score=100.0,
+            estado_revision='APROBADO_AUTOMATICO',
+            imagen_muestra=crop_legacy_alias,
+        )
+        PerfilEstudioPatron.objects.create(
+            nombre_perfil='Chequeo Prequirurgico Z2',
+            disparadores=['chequeo prequirurgico z2'],
+            estudios_ids=[self.estudio_hemo.id, self.estudio_glucemia.id],
+            activo=True,
+            imagen_muestra=crop_legacy_combo,
+        )
+        self.assertEqual(RecorteImagenEstudio.objects.count(), 0)
+
+        mig_0021 = importlib.import_module('app.migrations.0021_backfill_recortes_historicos')
+        mig_0021.backfill_recortes_historicos(apps, None)
+        self.assertEqual(RecorteImagenEstudio.objects.count(), 2)
+
+        # Ejecutar una segunda vez debe ser 100% idempotente
+        mig_0021.backfill_recortes_historicos(apps, None)
+        self.assertEqual(RecorteImagenEstudio.objects.count(), 2)
+
+        rec_alias = RecorteImagenEstudio.objects.get(imagen_muestra=crop_legacy_alias)
+        rec_combo = RecorteImagenEstudio.objects.get(imagen_muestra=crop_legacy_combo)
+        self.assertEqual(
+            list(RecorteEstudio.objects.filter(recorte=rec_alias).values_list('estudio_id', flat=True)),
+            [self.estudio_orina.id],
+        )
+        self.assertEqual(
+            set(RecorteEstudio.objects.filter(recorte=rec_combo).values_list('estudio_id', flat=True)),
+            {self.estudio_hemo.id, self.estudio_glucemia.id},
+        )
+
+        # Escanear luego del backfill debe devolver ambos trazos en trazos_coincidentes
+        scan_resp = client.post(
+            '/app/ocr/escanear-receta/',
+            {'textos': ['orina especial x1', 'chequeo prequirurgico z2']},
+            format='json',
+        )
+        self.assertEqual(scan_resp.status_code, status.HTTP_200_OK)
+        renglones = scan_resp.json()['renglones']
+        self.assertEqual(len(renglones[0]['trazos_coincidentes']), 1)
+        self.assertEqual(renglones[0]['trazos_coincidentes'][0]['recorte_id'], rec_alias.id)
+        self.assertEqual(len(renglones[1]['trazos_coincidentes']), 1)
+        self.assertEqual(renglones[1]['trazos_coincidentes'][0]['recorte_id'], rec_combo.id)
+
 
 
 
