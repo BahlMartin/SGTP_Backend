@@ -27,6 +27,11 @@ class RecetaUploadSerializer(serializers.Serializer):
         default=list,
         help_text="Recortes visuales DataURL opcionales paralelos a cada renglón para lectura cursiva asistida."
     )
+    usar_vision_ia = serializers.BooleanField(
+        required=False,
+        default=False,
+        help_text="Si es True, habilita asistencia automática de Visión IA sobre bloques dudosos."
+    )
 
 
 class OCRScanRequestSerializer(RecetaUploadSerializer):

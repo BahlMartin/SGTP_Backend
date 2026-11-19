@@ -1,8 +1,11 @@
 """
 Tests de Integración OCR, Memoria Adaptativa, Combos por IDs y Coocurrencia.
 """
+import base64
 import io
 import json
+import cv2
+import numpy as np
 from unittest.mock import patch, MagicMock
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
@@ -19,6 +22,7 @@ from app.models.studies import (
     RecorteEstudio
 )
 from app.services.ocr_service import OCRIntegrationService
+from app.services.ocr_visual_matcher import VisualMatcherService
 
 
 class OCRIntegrationTestCase(TestCase):
@@ -777,6 +781,161 @@ class OCRIntegrationTestCase(TestCase):
         ids_ia = {r['id_estudio'] for r in res_ia[0]['recomendados']}
         self.assertIn(est_embarazo.id, ids_ia)
         self.assertIn(self.estudio_hemo.id, ids_ia)
+
+    @staticmethod
+    def _build_handwritten_webp(
+        text: str,
+        *,
+        thickness: int = 2,
+        scale: float = 1.0,
+        tilt: float = 0.0,
+        sx: float = 1.0,
+        vhash: str = '',
+    ) -> str:
+        """Genera un recorte WebP realista de texto manuscrito para pruebas OpenCV."""
+        img = np.full((80, 420), 255, dtype=np.uint8)
+        cv2.putText(img, text, (20, 55), cv2.FONT_HERSHEY_SCRIPT_SIMPLEX, scale, 0, thickness, cv2.LINE_AA)
+        if tilt != 0.0 or sx != 1.0:
+            mat = np.float32([[sx, tilt, 0.0], [0.0, 1.0, 0.0]])
+            img = cv2.warpAffine(img, mat, (420, 80), borderValue=255)
+        ok, buf = cv2.imencode('.webp', img)
+        assert ok
+        b64 = base64.b64encode(buf.tobytes()).decode('ascii')
+        prefix = f"data:image/webp;vhash={vhash};base64," if vhash else "data:image/webp;base64,"
+        return f"{prefix}{b64}"
+
+    def test_comparador_opencv_precision_y_cero_falsos_positivos(self):
+        """Valida que HOG + Chamfer + NCC reconozca variaciones reales y rechace palabras distintas aunque compartan vhash."""
+        VisualMatcherService.limpiar_cache()
+
+        same_vhash = 'a5a55a5a5a5a5a5a24f3c1aaaa'
+        crop_gluc_base = self._build_handwritten_webp('Glucemia', thickness=2, scale=1.0, vhash=same_vhash)
+        crop_gluc_var = self._build_handwritten_webp(
+            'Glucemia', thickness=3, scale=1.05, tilt=0.08, sx=1.06, vhash='00000000000000000000000000'
+        )
+        crop_creatinina = self._build_handwritten_webp('Creatinina', thickness=2, scale=1.0, vhash=same_vhash)
+        crop_hemograma = self._build_handwritten_webp('Hemograma', thickness=2, scale=1.0, vhash=same_vhash)
+        crop_hepatograma = self._build_handwritten_webp('Hepatograma', thickness=2, scale=1.0, vhash=same_vhash)
+        crop_tsh = self._build_handwritten_webp('TSH', thickness=2, scale=1.0, vhash=same_vhash)
+        crop_hiv = self._build_handwritten_webp('HIV', thickness=2, scale=1.0, vhash=same_vhash)
+        crop_urea = self._build_handwritten_webp('Urea', thickness=2, scale=1.0, vhash=same_vhash)
+
+        prep_gluc_base = VisualMatcherService.preparar_recorte(crop_gluc_base)
+        prep_gluc_var = VisualMatcherService.preparar_recorte(crop_gluc_var)
+        prep_creat = VisualMatcherService.preparar_recorte(crop_creatinina)
+        prep_hemo = VisualMatcherService.preparar_recorte(crop_hemograma)
+        prep_hepa = VisualMatcherService.preparar_recorte(crop_hepatograma)
+        prep_tsh = VisualMatcherService.preparar_recorte(crop_tsh)
+        prep_hiv = VisualMatcherService.preparar_recorte(crop_hiv)
+        prep_urea = VisualMatcherService.preparar_recorte(crop_urea)
+
+        self.assertIsNotNone(prep_gluc_base)
+        self.assertGreaterEqual(VisualMatcherService.comparar_preparados(prep_gluc_base, prep_gluc_var), 80.0)
+        self.assertLess(VisualMatcherService.comparar_preparados(prep_gluc_base, prep_creat), 80.0)
+        self.assertLess(VisualMatcherService.comparar_preparados(prep_hemo, prep_hepa), 80.0)
+        self.assertLess(VisualMatcherService.comparar_preparados(prep_tsh, prep_hiv), 80.0)
+        self.assertLess(VisualMatcherService.comparar_preparados(prep_urea, prep_tsh), 80.0)
+
+        # Guardar Glucemia y un descarte real (firma/sello médico)
+        crop_firma_desc = self._build_handwritten_webp('Dr Perez MP', thickness=2, scale=0.95)
+        OCRIntegrationService.registrar_retroalimentacion(
+            renglones_confirmados=[
+                {
+                    'texto': '[Manuscrito a revisar]',
+                    'estudios_ids': [self.estudio_glucemia.id],
+                    'imagen_muestra': crop_gluc_base,
+                }
+            ],
+            recortes_descartados=[
+                {'texto': 'Firma Medica', 'imagen_muestra': crop_firma_desc}
+            ],
+        )
+
+        # Mismo trazo 'Glucemia' con variación debe recuperar Glucemia y su imagen histórica
+        mapeo_ok = OCRIntegrationService.mapear_textos_con_estudios(
+            textos_detectados=['[Manuscrito a revisar]'],
+            firmas_visuales=['00000000000000000000000000'],
+            recortes_imagen=[crop_gluc_var],
+            permitir_vision_ia=False,
+        )
+        r_ok = mapeo_ok['renglones'][0]
+        self.assertFalse(r_ok['es_ruido_aprendido'])
+        self.assertIn(self.estudio_glucemia.id, [rec['id_estudio'] for rec in r_ok['recomendados']])
+        self.assertIn(crop_gluc_base, r_ok['imagenes_muestra_conocidas'])
+
+        # 'Creatinina' aunque porte EXACTAMENTE el mismo vhash engañoso NO debe dar falso positivo con Glucemia
+        mapeo_fp = OCRIntegrationService.mapear_textos_con_estudios(
+            textos_detectados=['[Manuscrito a revisar]'],
+            firmas_visuales=[same_vhash],
+            recortes_imagen=[crop_creatinina],
+            permitir_vision_ia=False,
+        )
+        self.assertEqual(mapeo_fp['renglones'][0]['recomendados'], [])
+
+        # El trazo descartado real debe filtrarse como ruido sin bloquear estudios válidos
+        crop_firma_var = self._build_handwritten_webp('Dr Perez MP', thickness=3, scale=0.98, tilt=0.04)
+        mapeo_desc = OCRIntegrationService.mapear_textos_con_estudios(
+            textos_detectados=['[Manuscrito a revisar]', '[Manuscrito a revisar]'],
+            recortes_imagen=[crop_firma_var, crop_gluc_var],
+            permitir_vision_ia=False,
+        )
+        self.assertTrue(mapeo_desc['renglones'][0]['es_ruido_aprendido'])
+        self.assertFalse(mapeo_desc['renglones'][1]['es_ruido_aprendido'])
+        self.assertIn(self.estudio_glucemia.id, [rec['id_estudio'] for rec in mapeo_desc['renglones'][1]['recomendados']])
+
+    @override_settings(OCR_VISION_API_KEY='fake-gemini-key')
+    @patch('app.services.ocr_service.requests.post')
+    def test_endpoint_escanear_con_recortes_usa_opencv_local_sin_llamar_gemini(self, mock_post):
+        """Verifica que /app/ocr/escanear-receta/ compare recortes en Django y no envíe imágenes a Gemini por defecto."""
+        VisualMatcherService.limpiar_cache()
+        user = Personal.objects.create_user(
+            email='admision_cv@hospital.local',
+            password='Password123!',
+            nombre='Carlos',
+            apellidos='Ruiz',
+            dni=33445566,
+            rol=RolPersonal.ADMISION,
+        )
+        client = APIClient()
+        client.force_authenticate(user=user)
+
+        crop_gluc_base = self._build_handwritten_webp('Glucemia', thickness=2, scale=1.0)
+        crop_gluc_query = self._build_handwritten_webp('Glucemia', thickness=3, scale=1.04, tilt=0.07, sx=1.04)
+        crop_desconocido = self._build_handwritten_webp('Colesterol Total', thickness=2, scale=1.0)
+
+        fb_resp = client.post(
+            '/app/ocr/retroalimentar/',
+            {
+                'renglones_confirmados': [
+                    {
+                        'texto': '[Manuscrito a revisar]',
+                        'estudios_ids': [self.estudio_glucemia.id],
+                        'imagen_muestra': crop_gluc_base,
+                    }
+                ]
+            },
+            format='json',
+        )
+        self.assertEqual(fb_resp.status_code, status.HTTP_200_OK)
+
+        scan_resp = client.post(
+            '/app/ocr/escanear-receta/',
+            {
+                'textos': ['[Manuscrito a revisar]', '[Manuscrito a revisar]'],
+                'firmas_visuales': ['', ''],
+                'recortes_imagen': [crop_gluc_query, crop_desconocido],
+            },
+            format='json',
+        )
+        self.assertEqual(scan_resp.status_code, status.HTTP_200_OK)
+        mock_post.assert_not_called()
+
+        data = scan_resp.json()
+        self.assertEqual(len(data['renglones']), 2)
+        self.assertEqual(data['renglones'][0]['recomendados'][0]['id_estudio'], self.estudio_glucemia.id)
+        self.assertIn(crop_gluc_base, data['renglones'][0]['imagenes_muestra_conocidas'])
+        self.assertEqual(data['renglones'][1]['recomendados'], [])
+
 
 
 

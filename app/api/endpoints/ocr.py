@@ -43,6 +43,7 @@ class EscanearRecetaOCRView(APIView):
         textos = request.data.get('textos')
         firmas_visuales = request.data.get('firmas_visuales')
         recortes_imagen = request.data.get('recortes_imagen')
+        usar_vision_ia = bool(request.data.get('usar_vision_ia', False))
         if textos is not None:
             if not isinstance(textos, list):
                 return Response(
@@ -53,7 +54,8 @@ class EscanearRecetaOCRView(APIView):
             resultado = OCRIntegrationService.mapear_textos_con_estudios(
                 textos,
                 firmas_visuales=firmas_visuales if isinstance(firmas_visuales, list) else None,
-                recortes_imagen=recortes_imagen if isinstance(recortes_imagen, list) else None
+                recortes_imagen=recortes_imagen if isinstance(recortes_imagen, list) else None,
+                permitir_vision_ia=usar_vision_ia
             )
             combo = resultado.get('combo_detectado')
             msg_combo = f" [Batería detectada: {combo}]" if combo else ""

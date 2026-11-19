@@ -20,3 +20,5 @@ channels>=4.0.0
 channels-redis>=4.2.0
 daphne>=4.1.0
 maxminddb>=2.6.0
+numpy>=1.26.0
+opencv-python-headless>=4.9.0.80

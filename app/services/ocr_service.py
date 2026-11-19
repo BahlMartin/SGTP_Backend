@@ -26,6 +26,7 @@ from app.models.studies import (
     RecorteImagenEstudio,
     RecorteEstudio
 )
+from app.services.ocr_visual_matcher import VisualMatcherService
 
 logger = logging.getLogger(__name__)
 
@@ -417,8 +418,10 @@ class OCRIntegrationService:
         pares_descartados: Set[Tuple[str, int]],
         umbral_similitud: float = 75.0,
         firma_visual: str = '',
-        recortes_visuales_idx: List[Tuple[int, str, str, List[int]]] = None,
-        firmas_descartadas: List[str] = None
+        recortes_visuales_idx: List[Tuple[Any, ...]] = None,
+        firmas_descartadas: List[str] = None,
+        imagen_recorte: str = '',
+        descartes_preparados: List[Tuple[int, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Evalúa un único renglón o bloque detectado por OCR contra:
@@ -433,7 +436,12 @@ class OCRIntegrationService:
             str(raw_texto or '').strip().lower() == '[manuscrito a revisar]'
             or texto_norm == 'manuscrito a revisar'
         )
-        firma_norm = cls._extraer_vhash(firma_visual)
+        firma_norm = cls._extraer_vhash(firma_visual) or cls._extraer_vhash(imagen_recorte)
+        query_crop = (
+            VisualMatcherService.preparar_recorte(imagen_recorte)
+            if imagen_recorte and VisualMatcherService.is_available()
+            else None
+        )
 
         if not es_manuscrito_sin_texto and (not texto_norm or texto_norm in textos_descartados_globales):
             return {
@@ -504,9 +512,25 @@ class OCRIntegrationService:
                     mejor_por_segmento[segmento_key] = (estudio.id, score)
 
         # Paso 0: Descarte visual prioritario y búsqueda por consenso multi-recorte en RecorteImagenEstudio
-        if firma_norm:
+        usando_imagen_real = query_crop is not None
+        if usando_imagen_real or firma_norm:
+            umbral_descarte = 86.0 if usando_imagen_real else 88.0
+            umbral_coincidencia = 80.0 if usando_imagen_real else 82.0
+            umbral_consenso = 82.0 if usando_imagen_real else 85.0
+            umbral_ganador = 80.0 if usando_imagen_real else 84.0
+            umbral_directo = 88.0 if usando_imagen_real else 92.0
+
             max_sv_descarte = 0.0
-            if firmas_descartadas:
+            if usando_imagen_real:
+                if descartes_preparados:
+                    descartes_scores = VisualMatcherService.buscar_mejores_coincidencias(
+                        query_crop,
+                        descartes_preparados,
+                        top_k_stage1=10
+                    )
+                    if descartes_scores:
+                        max_sv_descarte = max(descartes_scores.values())
+            elif firmas_descartadas:
                 for f_desc in firmas_descartadas:
                     sv_desc = cls.calcular_similitud_visual(firma_norm, f_desc)
                     if sv_desc > max_sv_descarte:
@@ -521,26 +545,69 @@ class OCRIntegrationService:
             recortes_coincidentes: List[Tuple[int, float]] = []
 
             if recortes_visuales_idx:
-                for rec_id, firma_guardada, texto_det_norm, est_ids in recortes_visuales_idx:
-                    est_ids_validos = [
-                        eid for eid in est_ids
-                        if eid in estudios_por_id and (texto_norm, eid) not in pares_descartados
-                    ]
-                    if not est_ids_validos:
-                        continue
+                pares_evaluados: List[Tuple[int, str, List[int], float]] = []
+                if usando_imagen_real:
+                    candidatos_cv: List[Tuple[int, Any]] = []
+                    meta_cv: Dict[int, Tuple[str, List[int]]] = {}
+                    for rec_item in recortes_visuales_idx:
+                        rec_id, _, texto_det_norm, est_ids = rec_item[:4]
+                        prepared_cand = rec_item[4] if len(rec_item) >= 5 else None
+                        if prepared_cand is None:
+                            continue
+                        est_ids_validos = [
+                            eid for eid in est_ids
+                            if eid in estudios_por_id and (texto_norm, eid) not in pares_descartados
+                        ]
+                        if not est_ids_validos:
+                            continue
+                        candidatos_cv.append((rec_id, prepared_cand))
+                        meta_cv[rec_id] = (texto_det_norm, est_ids_validos)
+                    if candidatos_cv:
+                        scores_cv = VisualMatcherService.buscar_mejores_coincidencias(
+                            query_crop,
+                            candidatos_cv,
+                            top_k_stage1=15
+                        )
+                        for rec_id, sv_base in scores_cv.items():
+                            texto_det_norm, est_ids_validos = meta_cv[rec_id]
+                            pares_evaluados.append((rec_id, texto_det_norm, est_ids_validos, sv_base))
+                else:
+                    for rec_item in recortes_visuales_idx:
+                        rec_id, firma_guardada, texto_det_norm, est_ids = rec_item[:4]
+                        if not firma_guardada:
+                            continue
+                        est_ids_validos = [
+                            eid for eid in est_ids
+                            if eid in estudios_por_id and (texto_norm, eid) not in pares_descartados
+                        ]
+                        if not est_ids_validos:
+                            continue
+                        sv_base = cls.calcular_similitud_visual(firma_norm, firma_guardada)
+                        pares_evaluados.append((rec_id, texto_det_norm, est_ids_validos, sv_base))
 
-                    sv_base = cls.calcular_similitud_visual(firma_norm, firma_guardada)
+                umbral_boost = 76.0 if usando_imagen_real else 78.0
+                for rec_id, texto_det_norm, est_ids_validos, sv_base in pares_evaluados:
                     sv = sv_base
                     if (
-                        sv_base >= 78.0
+                        sv_base >= umbral_boost
                         and not es_manuscrito_sin_texto
                         and texto_det_norm
                         and len(texto_norm) >= 2
                         and fuzz.ratio(texto_norm, texto_det_norm) >= 65
                     ):
                         sv = min(100.0, round(sv_base + 2.5, 2))
+                    elif (
+                        usando_imagen_real
+                        and 80.0 <= sv < 88.0
+                        and not es_manuscrito_sin_texto
+                        and texto_det_norm
+                        and len(texto_norm) >= 4
+                        and len(texto_det_norm) >= 4
+                        and fuzz.ratio(texto_norm, texto_det_norm) < 35
+                    ):
+                        sv = max(0.0, round(sv - 6.0, 2))
 
-                    if sv >= 82.0:
+                    if sv >= umbral_coincidencia:
                         recortes_coincidentes.append((rec_id, sv))
                         for eid in est_ids_validos:
                             coincidencias_por_estudio[eid] = coincidencias_por_estudio.get(eid, 0) + 1
@@ -553,7 +620,7 @@ class OCRIntegrationService:
                         mejor_recorte_id = rec_id
                         mejor_estudios_ids = est_ids_validos
 
-            if max_sv_descarte >= 88.0 and max_sv_descarte >= mejor_score_trazo:
+            if max_sv_descarte >= umbral_descarte and max_sv_descarte >= mejor_score_trazo:
                 return {
                     'indice': indice,
                     'texto_renglon': raw_texto,
@@ -567,9 +634,9 @@ class OCRIntegrationService:
 
             estudios_consenso = [
                 eid for eid, cnt in coincidencias_por_estudio.items()
-                if cnt >= 2 and mejor_score_por_estudio.get(eid, 0.0) >= 85.0
+                if cnt >= 2 and mejor_score_por_estudio.get(eid, 0.0) >= umbral_consenso
             ]
-            if mejor_recorte_id is not None and mejor_score_trazo >= 84.0 and mejor_estudios_ids:
+            if mejor_recorte_id is not None and mejor_score_trazo >= umbral_ganador and mejor_estudios_ids:
                 recortes_coincidentes_ordenados = sorted(
                     recortes_coincidentes,
                     key=lambda item: item[1],
@@ -606,9 +673,7 @@ class OCRIntegrationService:
                         preseleccionado=True
                     )
 
-                # Si la similitud de trazo es muy alta (>= 92%) o no hay texto legible, resolver directo por trazado;
-                # en franja gris (84%-91.9%) con texto legible, continuar evaluando letra para evitar falsos positivos.
-                if mejor_score_trazo >= 92.0 or es_manuscrito_sin_texto:
+                if mejor_score_trazo >= umbral_directo or es_manuscrito_sin_texto:
                     recomendados_trazo = sorted(
                         candidatos_por_id.values(),
                         key=lambda c: (c['veces_confirmado'], c['similitud_score']),
@@ -629,21 +694,30 @@ class OCRIntegrationService:
                         'recomendados': recomendados_trazo
                     }
 
-        # Paso 1: Baterías / Combos (PerfilEstudioPatron) por texto y respaldo por huella visual
+        # Paso 1: Baterías / Combos (PerfilEstudioPatron) por texto y respaldo por imagen/huella visual
         patron_combo = None
         score_combo = 100.0
         if not es_manuscrito_sin_texto:
             patron_combo, _ = cls._buscar_mejor_combo_para_texto(texto_norm, patrones_activos)
 
-        if not patron_combo and firma_norm:
+        if not patron_combo and (usando_imagen_real or firma_norm):
             mejor_combo_visual = None
             mejor_score_visual = 0.0
+            umbral_combo_visual = 80.0 if usando_imagen_real else 84.0
             for patron in patrones_activos:
-                vhash_patron = cls._extraer_vhash(patron.imagen_muestra)
-                if not vhash_patron:
-                    continue
-                sv = cls.calcular_similitud_visual(firma_norm, vhash_patron)
-                if sv >= 84.0 and sv > mejor_score_visual:
+                img_patron = patron.imagen_muestra or ''
+                if usando_imagen_real:
+                    if not img_patron:
+                        continue
+                    cache_key = ('patron', patron.id, len(img_patron), img_patron[-24:])
+                    cand_patron = VisualMatcherService.obtener_o_preparar(cache_key, img_patron)
+                    sv = VisualMatcherService.comparar_preparados(query_crop, cand_patron)
+                else:
+                    vhash_patron = cls._extraer_vhash(img_patron)
+                    if not vhash_patron:
+                        continue
+                    sv = cls.calcular_similitud_visual(firma_norm, vhash_patron)
+                if sv >= umbral_combo_visual and sv > mejor_score_visual:
                     mejor_score_visual = sv
                     mejor_combo_visual = patron
             if mejor_combo_visual:
@@ -684,6 +758,22 @@ class OCRIntegrationService:
                     segmentos_norm_vistos.add(seg_norm)
                     segmentos_con_norm.append((seg, seg_norm))
 
+        def _score_visual_alias(alias_obj: EstudioAliasAprendido) -> float:
+            img_alias_src = alias_obj.imagen_muestra or ''
+            if usando_imagen_real:
+                if not img_alias_src:
+                    return 0.0
+                cache_key = ('alias', alias_obj.id, len(img_alias_src), img_alias_src[-24:])
+                cand_alias = VisualMatcherService.obtener_o_preparar(cache_key, img_alias_src)
+                return VisualMatcherService.comparar_preparados(query_crop, cand_alias)
+            if firma_norm:
+                vhash_alias = cls._extraer_vhash(img_alias_src) or cls._extraer_vhash(alias_obj.texto_patron)
+                if vhash_alias:
+                    return cls.calcular_similitud_visual(firma_norm, vhash_alias)
+            return 0.0
+
+        umbral_alias_visual = 80.0 if usando_imagen_real else 82.0
+
         for _, seg_norm in segmentos_con_norm:
             for alias in alias_activos:
                 estudio = alias.estudio
@@ -705,12 +795,10 @@ class OCRIntegrationService:
                         if ratio >= 78:
                             score_alias = min(100.0, round(ratio + min(12.0, alias.veces_confirmado * 2.5), 2))
 
-                if firma_norm:
-                    vhash_alias = cls._extraer_vhash(alias.imagen_muestra) or cls._extraer_vhash(alias.texto_patron)
-                    if vhash_alias:
-                        score_visual = cls.calcular_similitud_visual(firma_norm, vhash_alias)
-                        if score_visual >= 82.0:
-                            score_alias = max(score_alias, round(score_visual, 2))
+                if usando_imagen_real or firma_norm:
+                    score_visual = _score_visual_alias(alias)
+                    if score_visual >= umbral_alias_visual:
+                        score_alias = max(score_alias, round(score_visual, 2))
 
                 if score_alias > 0.0:
                     img_alias = alias.imagen_muestra or ''
@@ -728,16 +816,15 @@ class OCRIntegrationService:
                         segmento_key=seg_norm if len(sub_segmentos) > 1 and seg_norm != texto_norm else ''
                     )
 
-        if es_manuscrito_sin_texto and firma_norm:
+        if es_manuscrito_sin_texto and (usando_imagen_real or firma_norm):
             for alias in alias_activos:
                 estudio = alias.estudio
                 if not estudio or not estudio.activo:
                     continue
-                vhash_alias = cls._extraer_vhash(alias.imagen_muestra) or cls._extraer_vhash(alias.texto_patron)
-                if not vhash_alias:
+                if (texto_norm, estudio.id) in pares_descartados:
                     continue
-                score_visual = cls.calcular_similitud_visual(firma_norm, vhash_alias)
-                if score_visual >= 82.0:
+                score_visual = _score_visual_alias(alias)
+                if score_visual >= umbral_alias_visual:
                     img_alias = alias.imagen_muestra or ''
                     if img_alias:
                         _agregar_imagen_muestra(img_alias)
@@ -1313,29 +1400,81 @@ class OCRIntegrationService:
 
         estudios_activos = list(Estudios.objects.filter(activo=True))
 
-        recortes_visuales_idx: List[Tuple[int, str, str, List[int]]] = []
+        recortes_visuales_idx: List[Tuple[int, str, str, List[int], Any]] = []
         firmas_descartadas: List[str] = []
+        descartes_preparados: List[Tuple[int, Any]] = []
         try:
             recortes_raw = list(
                 RecorteImagenEstudio.objects.filter(es_descarte=False)
-                .exclude(firma_visual='')
                 .order_by('-fecha_registro', '-id')
                 .values_list('id', 'firma_visual', 'texto_detectado')
             )
+            descartes_raw = list(
+                RecorteImagenEstudio.objects.filter(es_descarte=True)
+                .order_by('-fecha_registro', '-id')
+                .values_list('id', 'firma_visual')
+            )
+            firmas_descartadas = [fv for _, fv in descartes_raw if fv]
+
+            estudios_por_recorte: Dict[int, List[int]] = {}
             if recortes_raw:
-                estudios_por_recorte: Dict[int, List[int]] = {}
                 for rec_id, est_id in RecorteEstudio.objects.values_list('recorte_id', 'estudio_id'):
                     estudios_por_recorte.setdefault(rec_id, []).append(est_id)
-                recortes_visuales_idx = [
-                    (rec_id, firma_v, normalizar_texto_clinico(texto_det), estudios_por_recorte[rec_id])
-                    for rec_id, firma_v, texto_det in recortes_raw
-                    if rec_id in estudios_por_recorte
-                ]
-            firmas_descartadas = list(
-                RecorteImagenEstudio.objects.filter(es_descarte=True)
-                .exclude(firma_visual='')
-                .values_list('firma_visual', flat=True)
-            )
+
+            recortes_validos_meta = [
+                (rec_id, firma_v, texto_det)
+                for rec_id, firma_v, texto_det in recortes_raw
+                if rec_id in estudios_por_recorte
+            ]
+
+            preparados_por_id: Dict[int, Any] = {}
+            if VisualMatcherService.is_available() and (recortes_validos_meta or descartes_raw):
+                items_a_hidratar: List[Tuple[int, str]] = []
+                for desc_id, fv in descartes_raw[:VisualMatcherService.MAX_CACHE_SIZE]:
+                    cache_key = ('recorte', desc_id, fv)
+                    if VisualMatcherService.tiene_en_cache(cache_key):
+                        preparados_por_id[desc_id] = VisualMatcherService.obtener_en_cache(cache_key)
+                    else:
+                        items_a_hidratar.append((desc_id, fv))
+
+                cupo_restante = max(0, VisualMatcherService.MAX_CACHE_SIZE - len(descartes_raw))
+                for rec_id, fv, _ in recortes_validos_meta[:cupo_restante]:
+                    cache_key = ('recorte', rec_id, fv)
+                    if VisualMatcherService.tiene_en_cache(cache_key):
+                        preparados_por_id[rec_id] = VisualMatcherService.obtener_en_cache(cache_key)
+                    else:
+                        items_a_hidratar.append((rec_id, fv))
+
+                if items_a_hidratar:
+                    ids_faltantes = [rid for rid, _ in items_a_hidratar]
+                    imgs_por_id = dict(
+                        RecorteImagenEstudio.objects
+                        .filter(id__in=ids_faltantes)
+                        .values_list('id', 'imagen_muestra')
+                    )
+                    for rid, fv in items_a_hidratar:
+                        prep = VisualMatcherService.obtener_o_preparar(
+                            ('recorte', rid, fv),
+                            imgs_por_id.get(rid, '')
+                        )
+                        preparados_por_id[rid] = prep
+
+                for desc_id, _ in descartes_raw:
+                    prep_desc = preparados_por_id.get(desc_id)
+                    if prep_desc is not None:
+                        descartes_preparados.append((desc_id, prep_desc))
+
+            for rec_id, firma_v, texto_det in recortes_validos_meta:
+                prep_rec = preparados_por_id.get(rec_id)
+                if not firma_v and prep_rec is None:
+                    continue
+                recortes_visuales_idx.append((
+                    rec_id,
+                    firma_v,
+                    normalizar_texto_clinico(texto_det),
+                    estudios_por_recorte[rec_id],
+                    prep_rec
+                ))
         except Exception as e:
             logger.warning("No se pudo consultar RecorteImagenEstudio: %s", e)
 
@@ -1367,6 +1506,7 @@ class OCRIntegrationService:
             recortes_visuales_idx,
             firmas_descartadas,
             grafo_afinidad,
+            descartes_preparados,
         )
 
     @classmethod
@@ -1391,6 +1531,7 @@ class OCRIntegrationService:
             pares_descartados,
             alias_activos,
             estudios_activos,
+            _,
             _,
             _,
             _,
@@ -1461,7 +1602,8 @@ class OCRIntegrationService:
         textos_detectados: List[str],
         umbral_similitud: int = None,
         firmas_visuales: List[str] = None,
-        recortes_imagen: List[str] = None
+        recortes_imagen: List[str] = None,
+        permitir_vision_ia: bool = True
     ) -> Dict[str, Any]:
         """
         Orquesta el pipeline completo de mapeo renglón por renglón:
@@ -1469,7 +1611,7 @@ class OCRIntegrationService:
         2. Baterías de Rutina (Combos por IDs) por texto y huella visual.
         3. Memoria Adaptativa de abreviaturas (exacta, fuzzy ponderada y similitud visual de trazo).
         4. Fuzzy matching sobre catálogo maestro y sub-segmentos.
-        5. Asistente híbrido gratuito de Visión IA sobre bloques cursivos dudosos (si está configurado).
+        5. Asistente híbrido gratuito de Visión IA sobre bloques cursivos dudosos (si está configurado y permitido).
         6. Desambiguación contextual (Boosting) y sugerencias de co-ocurrencia.
         """
         if not textos_detectados:
@@ -1512,6 +1654,7 @@ class OCRIntegrationService:
             recortes_visuales_idx,
             firmas_descartadas,
             grafo_afinidad,
+            descartes_preparados,
         ) = cls._cargar_contexto_mapeo()
 
         renglones: List[Dict[str, Any]] = []
@@ -1528,7 +1671,9 @@ class OCRIntegrationService:
                 umbral_similitud=float(umbral_similitud),
                 firma_visual=firma_visual,
                 recortes_visuales_idx=recortes_visuales_idx,
-                firmas_descartadas=firmas_descartadas
+                firmas_descartadas=firmas_descartadas,
+                imagen_recorte=recorte_url,
+                descartes_preparados=descartes_preparados
             )
             renglones.append(renglon_eval)
 
@@ -1543,7 +1688,7 @@ class OCRIntegrationService:
                 recortes_dudosos.append((idx, raw_texto, recorte_url))
 
         # Paso 5: Asistente híbrido gratuito de Visión IA solo para bloques dudosos con recorte (fusionando sin pisar)
-        if recortes_dudosos:
+        if permitir_vision_ia and recortes_dudosos:
             transcripciones_ia = cls._transcribir_recortes_con_vision_ia(recortes_dudosos, estudios_activos)
             for idx_ia, texto_ia in transcripciones_ia.items():
                 _, firma_visual, _ = textos_con_firma[idx_ia]
