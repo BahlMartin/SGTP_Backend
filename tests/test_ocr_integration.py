@@ -867,14 +867,19 @@ class OCRIntegrationTestCase(TestCase):
         self.assertIn(self.estudio_glucemia.id, [rec['id_estudio'] for rec in r_ok['recomendados']])
         self.assertIn(crop_gluc_base, r_ok['imagenes_muestra_conocidas'])
 
-        # 'Creatinina' aunque porte EXACTAMENTE el mismo vhash engañoso NO debe dar falso positivo con Glucemia
+        # 'Creatinina' aunque porte EXACTAMENTE el mismo vhash engañoso NO debe preseleccionar ni sugerir Glucemia como falso positivo
         mapeo_fp = OCRIntegrationService.mapear_textos_con_estudios(
             textos_detectados=['[Manuscrito a revisar]'],
             firmas_visuales=[same_vhash],
             recortes_imagen=[crop_creatinina],
             permitir_vision_ia=False,
         )
-        self.assertEqual(mapeo_fp['renglones'][0]['recomendados'], [])
+        self.assertEqual(mapeo_fp['sugerencias'], [])
+        recs_fp = mapeo_fp['renglones'][0]['recomendados']
+        self.assertEqual([r for r in recs_fp if r['preseleccionado']], [])
+        for r in recs_fp:
+            self.assertLess(r['similitud_score'], 78.0)
+            self.assertEqual(r['origen_deteccion'], 'MEMORIA_APRENDIDA')
 
         # El trazo descartado real debe filtrarse como ruido sin bloquear estudios válidos
         crop_firma_var = self._build_handwritten_webp('Dr Perez MP', thickness=3, scale=0.98, tilt=0.04)
@@ -938,7 +943,10 @@ class OCRIntegrationTestCase(TestCase):
         self.assertEqual(len(data['renglones']), 2)
         self.assertEqual(data['renglones'][0]['recomendados'][0]['id_estudio'], self.estudio_glucemia.id)
         self.assertIn(crop_gluc_base, data['renglones'][0]['imagenes_muestra_conocidas'])
-        self.assertEqual(data['renglones'][1]['recomendados'], [])
+        recs_r1 = data['renglones'][1]['recomendados']
+        self.assertEqual([r for r in recs_r1 if r['preseleccionado']], [])
+        for r in recs_r1:
+            self.assertLess(r['similitud_score'], 78.0)
 
     def _crear_cliente_ocr(self, email='admision_trazos@hospital.local', dni=99112233):
         user = Personal.objects.create_user(
@@ -1980,6 +1988,187 @@ class OCRIntegrationTestCase(TestCase):
         self.assertEqual(audit.resultado, ResultadoAuditoria.EXITO)
         self.assertEqual(audit.metadata.get('modo'), 'receta_contextual_ia')
         self.assertEqual(audit.metadata.get('motor_ia'), 'gemini-3.6-flash')
+
+    def test_trazos_sin_tope_seis_y_trae_estudios_de_trazos_coincidentes(self):
+        """Valida que no exista tope fijo de 6 trazos por renglón y que sus estudios pasen a recomendados."""
+        VisualMatcherService.limpiar_cache()
+        client = self._crear_cliente_ocr(email='sin_tope_trazos@hospital.local', dni=99110091)
+
+        confirmados = []
+        for i in range(8):
+            crop = self._build_handwritten_webp(
+                'Hemograma',
+                thickness=2 if i % 2 == 0 else 3,
+                scale=0.96 + (i * 0.015),
+                tilt=(i - 4) * 0.015,
+                sx=0.98 + (i * 0.01),
+            )
+            confirmados.append({
+                'texto': '[Manuscrito a revisar]',
+                'estudios_ids': [self.estudio_hemo.id],
+                'imagen_muestra': crop,
+            })
+
+        fb_resp = client.post(
+            '/app/ocr/retroalimentar/',
+            {'renglones_confirmados': confirmados},
+            format='json',
+        )
+        self.assertEqual(fb_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(RecorteImagenEstudio.objects.filter(es_descarte=False).count(), 8)
+
+        crop_query = self._build_handwritten_webp('Hemograma', thickness=2, scale=1.02, tilt=0.01)
+        scan_resp = client.post(
+            '/app/ocr/escanear-receta/',
+            {
+                'textos': ['[Manuscrito a revisar]'],
+                'firmas_visuales': [''],
+                'recortes_imagen': [crop_query],
+            },
+            format='json',
+        )
+        self.assertEqual(scan_resp.status_code, status.HTTP_200_OK)
+        renglon = scan_resp.json()['renglones'][0]
+        self.assertEqual(len(renglon['trazos_coincidentes']), 8)
+        self.assertTrue(any(r['id_estudio'] == self.estudio_hemo.id for r in renglon['recomendados']))
+
+    def test_texto_ocr_ruidoso_preserva_trazos_menores_78_y_texto_claro_filtra(self):
+        """Texto ruidoso ('oasdjas') preserva trazos < 78% de otros estudios; texto claro ('Hemograma') sí filtra."""
+        VisualMatcherService.limpiar_cache()
+        client = self._crear_cliente_ocr(email='filtro_claro_ruido@hospital.local', dni=99110092)
+
+        crop_gluc = self._build_handwritten_webp('Glucemia', thickness=2, scale=1.0)
+        crop_hemo = self._build_handwritten_webp('Hemograma', thickness=2, scale=1.0)
+        crop_creat_query = self._build_handwritten_webp('Creatinina', thickness=2, scale=1.0)
+        # Glucemia vs Creatinina (~76.99% < 78%) y Hemograma vs Creatinina (~50-75% < 78%)
+        client.post(
+            '/app/ocr/retroalimentar/',
+            {
+                'renglones_confirmados': [
+                    {'texto': '[Manuscrito a revisar]', 'estudios_ids': [self.estudio_glucemia.id], 'imagen_muestra': crop_gluc},
+                    {'texto': '[Manuscrito a revisar]', 'estudios_ids': [self.estudio_hemo.id], 'imagen_muestra': crop_hemo},
+                ]
+            },
+            format='json',
+        )
+        rec_gluc = RecorteImagenEstudio.objects.get(imagen_muestra=crop_gluc)
+        rec_hemo = RecorteImagenEstudio.objects.get(imagen_muestra=crop_hemo)
+
+        with patch.object(
+            VisualMatcherService,
+            'buscar_mejores_coincidencias_detallado',
+            return_value={
+                rec_gluc.id: (65.0, {'hog_cos': 0.72, 'chamfer_sim': 0.70, 'min_zone_chamfer': 0.65, 'ncc_sim': 0.45, 'ar_diff': 0.1}),
+                rec_hemo.id: (62.0, {'hog_cos': 0.70, 'chamfer_sim': 0.68, 'min_zone_chamfer': 0.62, 'ncc_sim': 0.42, 'ar_diff': 0.1}),
+            },
+        ):
+            # Caso A: texto OCR ruidoso ('oasdjas') -> preserva ambos trazos < 78% y trae ambos estudios
+            resp_ruido = client.post(
+                '/app/ocr/escanear-receta/',
+                {
+                    'textos': ['oasdjas'],
+                    'firmas_visuales': [''],
+                    'recortes_imagen': [crop_creat_query],
+                },
+                format='json',
+            )
+            self.assertEqual(resp_ruido.status_code, status.HTTP_200_OK)
+            r_ruido = resp_ruido.json()['renglones'][0]
+            self.assertEqual({t['recorte_id'] for t in r_ruido['trazos_coincidentes']}, {rec_gluc.id, rec_hemo.id})
+            ids_rec_ruido = {r['id_estudio'] for r in r_ruido['recomendados']}
+            self.assertIn(self.estudio_glucemia.id, ids_rec_ruido)
+            self.assertIn(self.estudio_hemo.id, ids_rec_ruido)
+
+            # Caso B: texto OCR claro ('Hemograma') -> filtra trazos < 78% dejando solo Hemograma
+            resp_claro = client.post(
+                '/app/ocr/escanear-receta/',
+                {
+                    'textos': ['Hemograma'],
+                    'firmas_visuales': [''],
+                    'recortes_imagen': [crop_creat_query],
+                },
+                format='json',
+            )
+            self.assertEqual(resp_claro.status_code, status.HTTP_200_OK)
+            r_claro = resp_claro.json()['renglones'][0]
+            self.assertEqual([t['recorte_id'] for t in r_claro['trazos_coincidentes']], [rec_hemo.id])
+
+    def test_busqueda_secundaria_24_a_39_trae_todas_las_similitudes_multiples_estudios(self):
+        """En banda secundaria (24%–39.9%) retorna todas las similitudes entre múltiples estudios y trazos."""
+        VisualMatcherService.limpiar_cache()
+        client = self._crear_cliente_ocr(email='sec_band_all@hospital.local', dni=99110093)
+
+        crop_h1 = self._build_handwritten_webp('Hemograma 1', thickness=2, scale=1.0)
+        crop_h2 = self._build_handwritten_webp('Hemograma 2', thickness=3, scale=1.02)
+        crop_g1 = self._build_handwritten_webp('Glucemia 1', thickness=2, scale=1.0)
+        crop_u1 = self._build_handwritten_webp('Urea 1', thickness=2, scale=1.0)
+        crop_query = self._build_handwritten_webp('Garabato', thickness=2, scale=1.0)
+
+        client.post(
+            '/app/ocr/retroalimentar/',
+            {
+                'renglones_confirmados': [
+                    {'texto': '[Manuscrito a revisar]', 'estudios_ids': [self.estudio_hemo.id], 'imagen_muestra': crop_h1},
+                    {'texto': '[Manuscrito a revisar]', 'estudios_ids': [self.estudio_hemo.id], 'imagen_muestra': crop_h2},
+                    {'texto': '[Manuscrito a revisar]', 'estudios_ids': [self.estudio_glucemia.id], 'imagen_muestra': crop_g1},
+                    {'texto': '[Manuscrito a revisar]', 'estudios_ids': [self.estudio_orina.id], 'imagen_muestra': crop_u1},
+                ]
+            },
+            format='json',
+        )
+        rec_h1 = RecorteImagenEstudio.objects.get(imagen_muestra=crop_h1)
+        rec_h2 = RecorteImagenEstudio.objects.get(imagen_muestra=crop_h2)
+        rec_g1 = RecorteImagenEstudio.objects.get(imagen_muestra=crop_g1)
+        rec_u1 = RecorteImagenEstudio.objects.get(imagen_muestra=crop_u1)
+
+        det_dummy = {'hog_cos': 0.35, 'chamfer_sim': 0.38, 'min_zone_chamfer': 0.30, 'ncc_sim': 0.25, 'ar_diff': 0.15}
+        with patch.object(
+            VisualMatcherService,
+            'buscar_mejores_coincidencias_detallado',
+            return_value={
+                rec_h1.id: (37.0, det_dummy),
+                rec_h2.id: (33.5, det_dummy),
+                rec_g1.id: (29.0, det_dummy),
+                rec_u1.id: (25.5, det_dummy),
+            },
+        ):
+            # 1. Con texto ruidoso ('oasdjas') devuelve los 4 trazos y los 3 estudios (no solo 1)
+            resp_all = client.post(
+                '/app/ocr/escanear-receta/',
+                {
+                    'textos': ['oasdjas'],
+                    'firmas_visuales': [''],
+                    'recortes_imagen': [crop_query],
+                },
+                format='json',
+            )
+            self.assertEqual(resp_all.status_code, status.HTTP_200_OK)
+            r_all = resp_all.json()['renglones'][0]
+            self.assertEqual(
+                {t['recorte_id'] for t in r_all['trazos_coincidentes']},
+                {rec_h1.id, rec_h2.id, rec_g1.id, rec_u1.id},
+            )
+            ids_rec_all = {r['id_estudio'] for r in r_all['recomendados']}
+            self.assertTrue({self.estudio_hemo.id, self.estudio_glucemia.id, self.estudio_orina.id}.issubset(ids_rec_all))
+            for r in r_all['recomendados']:
+                if r['id_estudio'] in {self.estudio_hemo.id, self.estudio_glucemia.id, self.estudio_orina.id}:
+                    self.assertFalse(r['preseleccionado'])
+                    self.assertEqual(r['origen_deteccion'], 'MEMORIA_APRENDIDA')
+
+            # 2. Con texto claro ('Hemograma') devuelve TODOS los trazos secundarios de Hemograma (h1 y h2, no solo 1)
+            resp_hemo = client.post(
+                '/app/ocr/escanear-receta/',
+                {
+                    'textos': ['Hemograma'],
+                    'firmas_visuales': [''],
+                    'recortes_imagen': [crop_query],
+                },
+                format='json',
+            )
+            self.assertEqual(resp_hemo.status_code, status.HTTP_200_OK)
+            r_hemo = resp_hemo.json()['renglones'][0]
+            self.assertEqual({t['recorte_id'] for t in r_hemo['trazos_coincidentes']}, {rec_h1.id, rec_h2.id})
+
 
 
 

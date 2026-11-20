@@ -557,6 +557,69 @@ class OCRIntegrationService:
 
         return round(float(max_score), 2)
 
+    _ACRONIMOS_CLINICOS_CLAROS: Set[str] = {
+        'hba1c', 'tsh', 't3', 't4', 't4l', 'ft4', 'hiv', 'vih', 'vdrl', 'pcr',
+        'vsg', 'ers', 'got', 'gpt', 'ast', 'alt', 'fal', 'ggt', 'hdl', 'ldl',
+        'vldl', 'tg', 'rac', 'cac', 'iono', 'hemo', 'hepato', 'urea', 'uremia',
+        'glucemia', 'glicemia', 'creatinina', 'proteinuria', 'albuminuria',
+        'microalbuminuria', 'orina', 'lipidograma', 'colesterol',
+        'trigliceridos', 'bilirrubina', 'ferritina', 'transferrina', 'psa',
+        'cea', 'ca125', 'coagulograma', 'kptt', 'aptt', 'rin', 'inr', 'tp',
+        'app', 'hcg', 'bhcg', 'lh', 'fsh', 'prl', 'dht', 'ige', 'igg', 'igm',
+        'iga', 'cpk', 'ldh', 'amilasa', 'lipasa', 'calcio', 'fosforo',
+        'magnesio', 'sodio', 'potasio', 'cloro', 'hierro', 'ferremia', 'folico',
+        'b12', 'vitd',
+    }
+
+    @classmethod
+    def _es_texto_ocr_claro_para_estudio(
+        cls,
+        seg_raw: str,
+        seg_norm: str,
+        estudio: Estudios,
+        score_cat: float,
+    ) -> bool:
+        """
+        Determina si el texto OCR coincidió de forma clara y legible con el estudio o sigla clínica,
+        evitando que lecturas cursivas ruidosas (ej. 'oasdjas') eliminen trazos visuales < 78%.
+        """
+        if score_cat < 90.0 or not seg_norm:
+            return False
+
+        codigo_norm = str(estudio.codigo_practica or '').upper().strip()
+        if codigo_norm and seg_norm.upper() == codigo_norm:
+            return True
+
+        estudio_norm = normalizar_texto_clinico(estudio.nombre)
+        if not estudio_norm:
+            return False
+
+        if len(seg_norm) >= 4 and fuzz.token_set_ratio(seg_norm, estudio_norm) >= 90.0:
+            return True
+
+        tokens_seg = [
+            t for t in re.split(r'[\s/()]+', seg_norm)
+            if t and t not in STOPWORDS_MEDICAS
+        ]
+        tokens_est = [
+            w for w in re.split(r'[\s/()]+', estudio_norm)
+            if w and w not in STOPWORDS_MEDICAS
+        ]
+        for tok in tokens_seg:
+            if len(tok) >= 4 and any(
+                len(w_est) >= 4 and fuzz.ratio(tok, w_est) >= 88.0
+                for w_est in tokens_est
+            ):
+                return True
+
+        if score_cat >= 92.0 and (
+            seg_norm in cls._ACRONIMOS_CLINICOS_CLAROS
+            or any(tok in cls._ACRONIMOS_CLINICOS_CLAROS for tok in tokens_seg)
+        ):
+            return True
+
+        return False
+
     @staticmethod
     def _dividir_subsegmentos(raw_texto: str) -> List[str]:
         """Divide un renglón compuesto en sub-segmentos preservando ratios clínicos (Alb/Creat) y tokens '+g'."""
@@ -832,7 +895,9 @@ class OCRIntegrationService:
         imagenes_secundarias: Dict[str, Tuple[List[int], float]] = {}
         imagenes_negativas_excluidas: Set[str] = set()
         estudios_texto_resueltos: Set[int] = set()
+        estudios_texto_claro_ids: Set[int] = set()
         paso0_preseleccionados_debiles: Set[int] = set()
+        paso0_gano_directo = False
         neg_map = negativos_por_recorte or {}
         neg_preps_por_fb_id: Dict[int, Any] = {}
 
@@ -1034,6 +1099,16 @@ class OCRIntegrationService:
         mejor_score_trazo = 0.0
         top_score_estudio_paso0 = 0.0
         umbral_directo = 78.0 if usando_imagen_real else 92.0
+        umbral_sec_base_cv = 24.0
+        umbral_sec_final_cv = 22.0
+        umbral_sec_base_vhash = 55.0
+        umbral_sec_final_vhash = 50.0
+        umbral_sec_base = umbral_sec_base_cv if usando_imagen_real else umbral_sec_base_vhash
+        umbral_sec_final = umbral_sec_final_cv if usando_imagen_real else umbral_sec_final_vhash
+        candidatos_secundarios_paso0: List[
+            Tuple[int, float, float, List[int], Dict[str, float]]
+        ] = []
+
         if usando_imagen_real or firma_norm:
             umbral_descarte = 68.0 if usando_imagen_real else 88.0
             umbral_coincidencia = 40.0 if usando_imagen_real else 82.0
@@ -1067,9 +1142,6 @@ class OCRIntegrationService:
             recortes_coincidentes_detallados: List[
                 Tuple[int, float, float, List[int], Dict[str, float]]
             ] = []
-            candidatos_manuscrito_fallback: List[
-                Tuple[int, float, float, List[int], Dict[str, float]]
-            ] = []
 
             if recortes_visuales_idx:
                 pares_evaluados: List[
@@ -1097,7 +1169,8 @@ class OCRIntegrationService:
                         scores_cv = VisualMatcherService.buscar_mejores_coincidencias_detallado(
                             query_crop,
                             candidatos_cv,
-                            top_k_stage1=80,
+                            top_k_stage1=max(120, len(candidatos_cv)),
+                            min_hog_stage1=(0.0 if len(candidatos_cv) <= 500 else 0.15),
                             pesos=pesos_visuales,
                         )
                         for rec_id, (sv_base, metricas_cv) in scores_cv.items():
@@ -1139,7 +1212,7 @@ class OCRIntegrationService:
                     rec_ids_hidratar = [
                         rec_id
                         for rec_id, _, _, sv_base, _, _, _ in pares_evaluados
-                        if sv_base >= (umbral_coincidencia - 6.0)
+                        if sv_base >= umbral_sec_base_cv
                     ]
                     _asegurar_negativos_hidratados(rec_ids_hidratar)
 
@@ -1195,8 +1268,8 @@ class OCRIntegrationService:
                             if sv > mejor_score_por_estudio.get(eid, 0.0):
                                 mejor_score_por_estudio[eid] = sv
                                 mejor_recorte_por_estudio[eid] = rec_id
-                    elif es_manuscrito_sin_texto and usando_imagen_real and sv >= 28.0:
-                        candidatos_manuscrito_fallback.append((
+                    elif sv_base >= umbral_sec_base and sv >= umbral_sec_final:
+                        candidatos_secundarios_paso0.append((
                             rec_id,
                             sv,
                             score_base,
@@ -1220,10 +1293,6 @@ class OCRIntegrationService:
                     'trazos_coincidentes': [],
                     'recomendados': []
                 }
-
-            if es_manuscrito_sin_texto and not recortes_coincidentes_detallados and candidatos_manuscrito_fallback:
-                candidatos_manuscrito_fallback.sort(key=lambda item: item[1], reverse=True)
-                recortes_coincidentes_detallados.extend(candidatos_manuscrito_fallback[:3])
 
             if recortes_coincidentes_detallados:
                 recortes_coincidentes_detallados.sort(key=lambda item: item[1], reverse=True)
@@ -1332,31 +1401,12 @@ class OCRIntegrationService:
                         )
                         and not es_renglon_multi_segmento
                     ):
-                        recomendados_trazo = sorted(
-                            candidatos_por_id.values(),
-                            key=lambda c: (
-                                1 if c['preseleccionado'] else 0,
-                                c['similitud_score'],
-                                c['veces_confirmado'],
-                            ),
-                            reverse=True,
-                        )
-                        preseleccionados_trazo = [c for c in recomendados_trazo if c.get('preseleccionado')]
-                        return {
-                            'indice': indice,
-                            'texto_renglon': raw_texto,
-                            'texto_normalizado': texto_norm,
-                            'es_ruido_aprendido': False,
-                            'combo_detectado': (
-                                f"Trazo visual ({len(preseleccionados_trazo)} estudios)"
-                                if len(preseleccionados_trazo) > 1
-                                else None
-                            ),
-                            'imagen_muestra_conocida': imagen_muestra_conocida,
-                            'imagenes_muestra_conocidas': imagenes_muestra_conocidas,
-                            'trazos_coincidentes': trazos_coincidentes[:6],
-                            'recomendados': recomendados_trazo
-                        }
+                        paso0_gano_directo = True
+                        preseleccionados_paso0 = [
+                            c for c in candidatos_por_id.values() if c.get('preseleccionado')
+                        ]
+                        if len(preseleccionados_paso0) > 1:
+                            combo_detectado = f"Trazo visual ({len(preseleccionados_paso0)} estudios)"
 
         # Paso 1: Baterías / Combos (PerfilEstudioPatron) por texto y respaldo por imagen/huella visual
         patron_combo = None
@@ -1367,7 +1417,7 @@ class OCRIntegrationService:
             if patron_combo:
                 patron_combo_por_texto = True
 
-        if not patron_combo and (usando_imagen_real or firma_norm):
+        if not patron_combo and not paso0_gano_directo and (usando_imagen_real or firma_norm):
             mejor_combo_visual = None
             mejor_score_visual = 0.0
             umbral_combo_visual = 76.0 if usando_imagen_real else 84.0
@@ -1396,33 +1446,36 @@ class OCRIntegrationService:
                 score_combo = round(mejor_score_visual, 2)
 
         if patron_combo:
-            combo_detectado = patron_combo.nombre_perfil
             est_ids_combo_validos = [
                 est_id for est_id in (patron_combo.estudios_ids or [])
                 if est_id in estudios_por_id and (texto_norm, est_id) not in pares_descartados
             ]
-            if patron_combo.imagen_muestra:
-                _agregar_imagen_muestra(patron_combo.imagen_muestra)
-                if not imagen_muestra_conocida:
-                    imagen_muestra_conocida = patron_combo.imagen_muestra
-                _registrar_imagen_secundaria(
-                    patron_combo.imagen_muestra,
-                    est_ids_combo_validos,
-                    score_combo,
-                )
-            for est_id in (patron_combo.estudios_ids or []):
-                est = estudios_por_id.get(est_id)
-                if est and (texto_norm, est.id) not in pares_descartados:
-                    if patron_combo_por_texto:
-                        estudios_texto_resueltos.add(est.id)
-                    _registrar_candidato(
-                        estudio=est,
-                        score=score_combo,
-                        origen='COMBO_RUTINA',
-                        veces_confirmado=patron_combo.frecuencia_uso,
-                        imagen_muestra=patron_combo.imagen_muestra or '',
-                        preseleccionado=True
+            if patron_combo_por_texto:
+                estudios_texto_claro_ids.update(est_ids_combo_validos)
+            if not paso0_gano_directo:
+                combo_detectado = patron_combo.nombre_perfil
+                if patron_combo.imagen_muestra:
+                    _agregar_imagen_muestra(patron_combo.imagen_muestra)
+                    if not imagen_muestra_conocida:
+                        imagen_muestra_conocida = patron_combo.imagen_muestra
+                    _registrar_imagen_secundaria(
+                        patron_combo.imagen_muestra,
+                        est_ids_combo_validos,
+                        score_combo,
                     )
+                for est_id in (patron_combo.estudios_ids or []):
+                    est = estudios_por_id.get(est_id)
+                    if est and (texto_norm, est.id) not in pares_descartados:
+                        if patron_combo_por_texto:
+                            estudios_texto_resueltos.add(est.id)
+                        _registrar_candidato(
+                            estudio=est,
+                            score=score_combo,
+                            origen='COMBO_RUTINA',
+                            veces_confirmado=patron_combo.frecuencia_uso,
+                            imagen_muestra=patron_combo.imagen_muestra or '',
+                            preseleccionado=True
+                        )
 
         # Paso 2: Sub-segmentos y Alias Aprendidos (EstudioAliasAprendido) por texto y trazo visual
         segmentos_con_norm: List[Tuple[str, str]] = []
@@ -1556,25 +1609,32 @@ class OCRIntegrationService:
                     and alias.estado_revision != 'REVISADO_JEFA'
                     and score_alias_texto >= 82.0
                 )
-                if score_alias_texto >= 82.0 and not es_minoritario_ruidoso:
-                    estudios_texto_resueltos.add(estudio.id)
-                img_alias = alias.imagen_muestra or ''
-                if img_alias and not es_minoritario_ruidoso:
-                    _agregar_imagen_muestra(img_alias)
-                    if not imagen_muestra_conocida and img_alias.strip() not in imagenes_negativas_excluidas:
-                        imagen_muestra_conocida = img_alias
-                    _registrar_imagen_secundaria(img_alias, [estudio.id], score_alias)
-                _registrar_candidato(
-                    estudio=estudio,
-                    score=(min(score_alias, 74.0) if es_minoritario_ruidoso else score_alias),
-                    origen='MEMORIA_APRENDIDA',
-                    veces_confirmado=alias.veces_confirmado,
-                    imagen_muestra=('' if es_minoritario_ruidoso else img_alias),
-                    preseleccionado=(score_alias >= 85.0 and not es_minoritario_ruidoso),
-                    segmento_key=seg_norm if len(sub_segmentos) > 1 and seg_norm != texto_norm else ''
-                )
+                if (
+                    score_alias_texto >= 95.0
+                    and not es_minoritario_ruidoso
+                    and (alias.estado_revision == 'REVISADO_JEFA' or int(alias.veces_confirmado or 0) >= 2)
+                ):
+                    estudios_texto_claro_ids.add(estudio.id)
+                if not paso0_gano_directo:
+                    if score_alias_texto >= 82.0 and not es_minoritario_ruidoso:
+                        estudios_texto_resueltos.add(estudio.id)
+                    img_alias = alias.imagen_muestra or ''
+                    if img_alias and not es_minoritario_ruidoso:
+                        _agregar_imagen_muestra(img_alias)
+                        if not imagen_muestra_conocida and img_alias.strip() not in imagenes_negativas_excluidas:
+                            imagen_muestra_conocida = img_alias
+                        _registrar_imagen_secundaria(img_alias, [estudio.id], score_alias)
+                    _registrar_candidato(
+                        estudio=estudio,
+                        score=(min(score_alias, 74.0) if es_minoritario_ruidoso else score_alias),
+                        origen='MEMORIA_APRENDIDA',
+                        veces_confirmado=alias.veces_confirmado,
+                        imagen_muestra=('' if es_minoritario_ruidoso else img_alias),
+                        preseleccionado=(score_alias >= 85.0 and not es_minoritario_ruidoso),
+                        segmento_key=seg_norm if len(sub_segmentos) > 1 and seg_norm != texto_norm else ''
+                    )
 
-        if es_manuscrito_sin_texto and (usando_imagen_real or firma_norm):
+        if not paso0_gano_directo and es_manuscrito_sin_texto and (usando_imagen_real or firma_norm):
             umbral_alias_manuscrito = max(umbral_alias_visual, umbral_directo) if usando_imagen_real else umbral_alias_visual
             for alias in alias_activos:
                 estudio = alias.estudio
@@ -1612,34 +1672,33 @@ class OCRIntegrationService:
                     min_score=55.0
                 )
                 if score_cat >= 55.0:
-                    if score_cat >= 86.0:
-                        estudios_texto_resueltos.add(estudio.id)
-                    _registrar_candidato(
-                        estudio=estudio,
-                        score=score_cat,
-                        origen='OCR_DIRECTO',
-                        preseleccionado=False,
-                        segmento_key=seg_norm if len(sub_segmentos) > 1 and seg_norm != texto_norm else ''
-                    )
+                    if score_cat >= 90.0 and cls._es_texto_ocr_claro_para_estudio(seg_raw, seg_norm, estudio, score_cat):
+                        estudios_texto_claro_ids.add(estudio.id)
+                    if not paso0_gano_directo:
+                        if score_cat >= 86.0:
+                            estudios_texto_resueltos.add(estudio.id)
+                        _registrar_candidato(
+                            estudio=estudio,
+                            score=score_cat,
+                            origen='OCR_DIRECTO',
+                            preseleccionado=False,
+                            segmento_key=seg_norm if len(sub_segmentos) > 1 and seg_norm != texto_norm else ''
+                        )
 
-        # Reconciliación híbrida: si texto claro resolvió estudios y Paso 0 no superó umbral_directo,
-        # evitar que un match visual moderado de otro estudio domine recomendados o trazos_coincidentes.
-        if (
-            not es_manuscrito_sin_texto
-            and estudios_texto_resueltos
-            and mejor_score_trazo < umbral_directo
-            and top_score_estudio_paso0 < umbral_directo
-        ):
-            for eid_c, cand_c in list(candidatos_por_id.items()):
-                if eid_c not in estudios_texto_resueltos and (
-                    (cand_c.get('origen_deteccion') == 'MEMORIA_APRENDIDA' and cand_c.get('similitud_score', 0.0) < umbral_directo)
-                    or (eid_c in paso0_preseleccionados_debiles and cand_c.get('similitud_score', 0.0) < 86.0)
-                ):
-                    cand_c['preseleccionado'] = False
+        # Reconciliación híbrida: solo cuando OCR leyó texto claro (estudios_texto_claro_ids),
+        # priorizar recomendados por texto si Paso 0 no superó umbral_directo y filtrar trazos < 78% de otros estudios.
+        if not es_manuscrito_sin_texto and estudios_texto_claro_ids:
+            if mejor_score_trazo < umbral_directo and top_score_estudio_paso0 < umbral_directo:
+                for eid_c, cand_c in list(candidatos_por_id.items()):
+                    if eid_c not in estudios_texto_claro_ids and (
+                        (cand_c.get('origen_deteccion') == 'MEMORIA_APRENDIDA' and cand_c.get('similitud_score', 0.0) < umbral_directo)
+                        or (eid_c in paso0_preseleccionados_debiles and cand_c.get('similitud_score', 0.0) < 86.0)
+                    ):
+                        cand_c['preseleccionado'] = False
             if trazos_coincidentes:
                 trazos_filtrados = [
                     t for t in trazos_coincidentes
-                    if (set(t.get('estudios_ids') or []) & estudios_texto_resueltos)
+                    if (set(t.get('estudios_ids') or []) & estudios_texto_claro_ids)
                     or t.get('similitud_score', 0.0) >= umbral_directo
                 ]
                 if len(trazos_filtrados) != len(trazos_coincidentes):
@@ -1739,13 +1798,12 @@ class OCRIntegrationService:
                 candidatos[0]['preseleccionado'] = True
 
         preseleccionados = [c for c in candidatos if c['preseleccionado']]
-        alternativos = [c for c in candidatos if not c['preseleccionado'] and c['similitud_score'] >= 55.0][:3]
+        alternativos = (
+            [c for c in candidatos if not c['preseleccionado']]
+            if paso0_gano_directo
+            else [c for c in candidatos if not c['preseleccionado'] and c['similitud_score'] >= 55.0][:3]
+        )
         recomendados = preseleccionados + alternativos
-
-        umbral_sec_base_cv = 24.0
-        umbral_sec_final_cv = 22.0
-        umbral_sec_base_vhash = 55.0
-        umbral_sec_final_vhash = 50.0
 
         # Resolver imágenes históricas de Pasos 1/2 contra RecorteImagenEstudio para habilitar votación Bien/Mal
         if imagenes_secundarias:
@@ -1840,131 +1898,49 @@ class OCRIntegrationService:
                         'metricas': dict(metricas_sec) if metricas_sec else {},
                     })
 
-        # Superficie híbrida de trazos para estudios resueltos por texto (Pasos 2/3) sin trazo aún
-        if (
-            not es_manuscrito_sin_texto
-            and (usando_imagen_real or firma_norm)
-            and recortes_visuales_idx
-        ):
-            estudios_objetivo = [
-                c['id_estudio'] for c in recomendados
-                if c.get('preseleccionado') or c.get('similitud_score', 0.0) >= 86.0
-            ]
-            estudios_ya_con_trazo = {
-                eid
-                for t in trazos_coincidentes
-                for eid in (t.get('estudios_ids') or [])
-            }
-            estudios_sin_trazo = [
-                eid for eid in estudios_objetivo if eid not in estudios_ya_con_trazo
-            ]
-            if estudios_sin_trazo:
-                candidatos_por_est: Dict[int, List[Tuple[int, str, List[int], Any, int, int]]] = {}
-                rec_ids_candidatos: List[int] = []
-                for rec_item in recortes_visuales_idx:
-                    rec_id, fv_cand, _, est_ids = rec_item[:4]
-                    prep_cand = rec_item[4] if len(rec_item) >= 5 else None
-                    v_pos = int(rec_item[5]) if len(rec_item) >= 6 else 0
-                    v_neg = int(rec_item[6]) if len(rec_item) >= 7 else 0
-                    if rec_id in recorte_ids_en_trazos or _es_recorte_negativo_excluido(v_pos, v_neg):
+        # Búsqueda secundaria visual sin tope de 1 estudio/recorte:
+        # trae todas las similitudes de la banda secundaria (24%–39.9% en OpenCV),
+        # restringidas por estudios_texto_claro_ids solo cuando el OCR leyó un estudio claro.
+        if (usando_imagen_real or firma_norm) and candidatos_secundarios_paso0:
+            elegidos_sec: List[Tuple[int, float, float, List[int], Dict[str, float]]] = []
+            for rec_id_s, sv_s, score_base_s, est_ids_s, metricas_s in candidatos_secundarios_paso0:
+                if rec_id_s in recorte_ids_en_trazos:
+                    continue
+                if not es_manuscrito_sin_texto and estudios_texto_claro_ids:
+                    if not (set(est_ids_s) & estudios_texto_claro_ids):
                         continue
-                    est_ids_validos = [
-                        eid for eid in est_ids
-                        if eid in estudios_por_id and (texto_norm, eid) not in pares_descartados
-                    ]
-                    if not est_ids_validos:
+                elegidos_sec.append((rec_id_s, sv_s, score_base_s, est_ids_s, metricas_s))
+
+            if elegidos_sec:
+                elegidos_sec.sort(key=lambda item: (item[1], item[2]), reverse=True)
+                imgs_sec = dict(
+                    RecorteImagenEstudio.objects
+                    .filter(id__in=[x[0] for x in elegidos_sec])
+                    .values_list('id', 'imagen_muestra')
+                )
+                for rec_id_s, sv_s, score_base_s, est_ids_s, metricas_s in elegidos_sec:
+                    img_s = (imgs_sec.get(rec_id_s) or '').strip()
+                    if img_s in imagenes_negativas_excluidas or (img_s and img_s in imagenes_en_trazos):
                         continue
-                    for eid_obj in estudios_sin_trazo:
-                        if eid_obj in est_ids_validos:
-                            candidatos_por_est.setdefault(eid_obj, []).append(
-                                (rec_id, fv_cand, est_ids_validos, prep_cand, v_pos, v_neg)
-                            )
-                            rec_ids_candidatos.append(rec_id)
-
-                if rec_ids_candidatos:
-                    if usando_imagen_real and neg_map:
-                        _asegurar_negativos_hidratados(list(dict.fromkeys(rec_ids_candidatos)))
-
-                    elegidos_surf: List[Tuple[int, float, float, List[int], Dict[str, float]]] = []
-                    elegidos_ids: Set[int] = set()
-                    for eid_obj in estudios_sin_trazo:
-                        if eid_obj in estudios_ya_con_trazo:
-                            continue
-                        evaluados_obj: List[Tuple[float, int, float, float, List[int], Dict[str, float]]] = []
-                        for rec_id, fv_cand, est_ids_val, prep_cand, v_pos, v_neg in candidatos_por_est.get(eid_obj, []):
-                            if rec_id in recorte_ids_en_trazos or rec_id in elegidos_ids:
-                                continue
-                            metricas_s: Dict[str, float] = {}
-                            if usando_imagen_real and query_crop is not None:
-                                if prep_cand is None:
-                                    continue
-                                sc_base, metricas_s = VisualMatcherService.comparar_preparados_detallado(
-                                    query_crop,
-                                    prep_cand,
-                                    pesos=pesos_visuales,
-                                )
-                                if sc_base < umbral_sec_base_cv:
-                                    continue
-                            elif firma_norm and fv_cand:
-                                sc_base = cls.calcular_similitud_visual(firma_norm, fv_cand)
-                                if sc_base < umbral_sec_base_vhash:
-                                    continue
-                            else:
-                                continue
-
-                            score_base_s = round(float(sc_base), 2)
-                            ajuste_rep, _ = cls._calcular_ajuste_reputacion(v_pos, v_neg)
-                            sv_s = float(sc_base) + ajuste_rep
-                            max_sim_cv, max_sim_vhash = _calcular_max_sim_neg(rec_id)
-                            sv_s, _ = _aplicar_penalizacion_negativa(sv_s, max_sim_cv, max_sim_vhash)
-                            sv_s = round(max(0.0, min(100.0, sv_s)), 2)
-
-                            min_final = umbral_sec_final_cv if usando_imagen_real else umbral_sec_final_vhash
-                            if sv_s < min_final:
-                                continue
-
-                            # Preferir recortes específicos de 1 o 2 estudios ante similitudes equivalentes
-                            bonus_especif = 4.0 if len(est_ids_val) == 1 else (2.0 if len(est_ids_val) == 2 else 0.0)
-                            rank_val = sv_s + bonus_especif
-                            evaluados_obj.append((rank_val, rec_id, sv_s, score_base_s, est_ids_val, metricas_s))
-
-                        if evaluados_obj:
-                            evaluados_obj.sort(key=lambda item: (item[0], item[2]), reverse=True)
-                            _, rec_id_w, sv_w, score_base_w, est_ids_w, metricas_w = evaluados_obj[0]
-                            elegidos_ids.add(rec_id_w)
-                            elegidos_surf.append((rec_id_w, sv_w, score_base_w, est_ids_w, metricas_w))
-                            for e_covered in est_ids_w:
-                                estudios_ya_con_trazo.add(e_covered)
-
-                    if elegidos_surf:
-                        imgs_surf = dict(
-                            RecorteImagenEstudio.objects
-                            .filter(id__in=[x[0] for x in elegidos_surf])
-                            .values_list('id', 'imagen_muestra')
-                        )
-                        for rec_id_w, sv_w, score_base_w, est_ids_w, metricas_w in elegidos_surf:
-                            img_w = (imgs_surf.get(rec_id_w) or '').strip()
-                            if img_w in imagenes_en_trazos or img_w in imagenes_negativas_excluidas:
-                                continue
-                            recorte_ids_en_trazos.add(rec_id_w)
-                            if img_w:
-                                imagenes_en_trazos.add(img_w)
-                                _agregar_imagen_muestra(img_w)
-                                if not imagen_muestra_conocida:
-                                    imagen_muestra_conocida = img_w
-                            trazos_coincidentes.append({
-                                'recorte_id': rec_id_w,
-                                'imagen_muestra': img_w,
-                                'estudios_ids': list(est_ids_w),
-                                'estudios_nombres': [
-                                    estudios_por_id[eid].nombre
-                                    for eid in est_ids_w
-                                    if eid in estudios_por_id
-                                ],
-                                'similitud_score': sv_w,
-                                'score_base': score_base_w,
-                                'metricas': dict(metricas_w) if metricas_w else {},
-                            })
+                    recorte_ids_en_trazos.add(rec_id_s)
+                    if img_s:
+                        imagenes_en_trazos.add(img_s)
+                        _agregar_imagen_muestra(img_s)
+                        if not imagen_muestra_conocida:
+                            imagen_muestra_conocida = img_s
+                    trazos_coincidentes.append({
+                        'recorte_id': rec_id_s,
+                        'imagen_muestra': img_s,
+                        'estudios_ids': list(est_ids_s),
+                        'estudios_nombres': [
+                            estudios_por_id[eid].nombre
+                            for eid in est_ids_s
+                            if eid in estudios_por_id
+                        ],
+                        'similitud_score': sv_s,
+                        'score_base': score_base_s,
+                        'metricas': dict(metricas_s) if metricas_s else {},
+                    })
 
         if imagenes_negativas_excluidas:
             imagenes_muestra_conocidas = [
@@ -1975,49 +1951,68 @@ class OCRIntegrationService:
                 imagen_muestra_conocida = imagenes_muestra_conocidas[0] if imagenes_muestra_conocidas else ''
 
         if trazos_coincidentes:
-            trazos_coincidentes.sort(key=lambda item: item['similitud_score'], reverse=True)
-            if (
-                len(trazos_coincidentes) > 6
-                and not es_manuscrito_sin_texto
-                and (mejor_score_trazo < umbral_directo or es_renglon_multi_segmento)
-                and recomendados
-            ):
-                presel_ids = [c['id_estudio'] for c in recomendados if c.get('preseleccionado')]
-                target_ids = presel_ids or [
-                    c['id_estudio'] for c in recomendados if c.get('similitud_score', 0.0) >= 86.0
-                ]
-                elegidos_top6: List[Dict[str, Any]] = []
-                usados_rec_ids: Set[int] = set()
-                for eid_tgt in target_ids:
-                    if len(elegidos_top6) >= 6:
-                        break
-                    if any(eid_tgt in (t.get('estudios_ids') or []) for t in elegidos_top6):
+            presel_ids_sort = {c['id_estudio'] for c in recomendados if c.get('preseleccionado')}
+            trazos_coincidentes.sort(
+                key=lambda item: (
+                    item['similitud_score'],
+                    1 if (presel_ids_sort and (set(item.get('estudios_ids') or []) & presel_ids_sort)) else 0,
+                    1 if len(item.get('estudios_ids') or []) == 1 else 0,
+                ),
+                reverse=True,
+            )
+
+            # Incorporar a recomendados todos los estudios referenciados por trazos coincidentes
+            estudios_desde_trazos: Dict[int, Dict[str, Any]] = {}
+            for trazo in trazos_coincidentes:
+                sv_t = float(trazo.get('similitud_score') or 0.0)
+                img_t = (trazo.get('imagen_muestra') or '').strip()
+                for eid_t in (trazo.get('estudios_ids') or []):
+                    if eid_t not in estudios_por_id or (texto_norm, eid_t) in pares_descartados:
                         continue
-                    cands_eid = [
-                        t for t in trazos_coincidentes
-                        if t['recorte_id'] not in usados_rec_ids and eid_tgt in (t.get('estudios_ids') or [])
-                    ]
-                    if cands_eid:
-                        # Preferir trazos específicos para el estudio objetivo ante puntajes cercanos
-                        cands_eid.sort(
-                            key=lambda t: (
-                                1 if len(t.get('estudios_ids') or []) == 1 else 0,
-                                t['similitud_score'],
-                            ),
-                            reverse=True,
-                        )
-                        elegidos_top6.append(cands_eid[0])
-                        usados_rec_ids.add(cands_eid[0]['recorte_id'])
-                for t in trazos_coincidentes:
-                    if len(elegidos_top6) >= 6:
-                        break
-                    if t['recorte_id'] not in usados_rec_ids:
-                        elegidos_top6.append(t)
-                        usados_rec_ids.add(t['recorte_id'])
-                elegidos_top6.sort(key=lambda item: item['similitud_score'], reverse=True)
-                trazos_coincidentes = elegidos_top6
-            else:
-                trazos_coincidentes = trazos_coincidentes[:6]
+                    info = estudios_desde_trazos.get(eid_t)
+                    if info is None:
+                        estudios_desde_trazos[eid_t] = {
+                            'best_score': sv_t,
+                            'best_img': img_t,
+                            'count': 1,
+                        }
+                    else:
+                        info['count'] += 1
+                        if sv_t > info['best_score']:
+                            info['best_score'] = sv_t
+                            if img_t:
+                                info['best_img'] = img_t
+                        elif not info['best_img'] and img_t:
+                            info['best_img'] = img_t
+
+            ids_en_recomendados = {r['id_estudio'] for r in recomendados}
+            for eid_t, info_t in estudios_desde_trazos.items():
+                if eid_t in ids_en_recomendados:
+                    continue
+                est_obj = estudios_por_id[eid_t]
+                recomendados.append({
+                    'id_estudio': est_obj.id,
+                    'codigo_practica': est_obj.codigo_practica,
+                    'nombre': est_obj.nombre,
+                    'tipo_muestra': est_obj.tipo_muestra,
+                    'similitud_score': round(info_t['best_score'], 2),
+                    'texto_detectado_origen': raw_texto,
+                    'origen_deteccion': 'MEMORIA_APRENDIDA',
+                    'preseleccionado': False,
+                    'veces_confirmado': max(1, info_t['count']),
+                    'imagen_muestra': info_t['best_img'],
+                })
+                ids_en_recomendados.add(eid_t)
+
+            recomendados.sort(
+                key=lambda c: (
+                    1 if c.get('preseleccionado') else 0,
+                    c.get('similitud_score', 0.0),
+                    *_especificidad_candidato(c),
+                    c.get('veces_confirmado', 0),
+                ),
+                reverse=True,
+            )
 
         return {
             'indice': indice,
@@ -2148,7 +2143,10 @@ class OCRIntegrationService:
                 for rec in renglon.get('recomendados', []):
                     if (
                         rec.get('similitud_score', 0.0) >= 82.0
-                        or rec.get('origen_deteccion') in ('COMBO_RUTINA', 'MEMORIA_APRENDIDA', 'VISION_IA')
+                        or (
+                            rec.get('origen_deteccion') in ('COMBO_RUTINA', 'MEMORIA_APRENDIDA', 'VISION_IA')
+                            and (rec.get('preseleccionado') or rec.get('similitud_score', 0.0) >= 76.0)
+                        )
                     ):
                         anclas_set.add(rec['id_estudio'])
 
@@ -2186,7 +2184,14 @@ class OCRIntegrationService:
                 recs = renglon.get('recomendados', [])
                 tenia_preseleccionado = any(r.get('preseleccionado') for r in recs)
                 for rec in recs:
-                    if 55.0 <= rec.get('similitud_score', 0.0) < 85.0 and rec['id_estudio'] in ids_con_alta_afinidad:
+                    if (
+                        55.0 <= rec.get('similitud_score', 0.0) < 85.0
+                        and rec['id_estudio'] in ids_con_alta_afinidad
+                        and not (
+                            rec.get('origen_deteccion') == 'MEMORIA_APRENDIDA'
+                            and not rec.get('preseleccionado')
+                        )
+                    ):
                         rec['similitud_score'] = 88.0
                         rec['origen_deteccion'] = 'VALIDADO_POR_CONTEXTO'
                         if not tenia_preseleccionado:
@@ -3233,7 +3238,13 @@ class OCRIntegrationService:
             if not combo_nombre and renglon.get('combo_detectado'):
                 combo_nombre = renglon['combo_detectado']
             for rec in renglon.get('recomendados', []):
-                if not rec.get('preseleccionado') and rec.get('similitud_score', 0.0) < umbral_similitud:
+                if not rec.get('preseleccionado') and (
+                    rec.get('similitud_score', 0.0) < umbral_similitud
+                    or (
+                        rec.get('origen_deteccion') == 'MEMORIA_APRENDIDA'
+                        and rec.get('similitud_score', 0.0) < 78.0
+                    )
+                ):
                     continue
                 est_id = rec['id_estudio']
                 existente = sugerencias_por_id.get(est_id)
