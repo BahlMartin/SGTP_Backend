@@ -106,7 +106,7 @@ class VisualMatcherService:
     """
     Motor de comparación visual de recortes médicos con caché LRU acotada en RAM.
     """
-    MAX_CACHE_SIZE = 600
+    MAX_CACHE_SIZE = 2500
     DEFAULT_WEIGHTS: Dict[str, float] = dict(DEFAULT_WEIGHTS)
     MIN_WEIGHT: float = MIN_WEIGHT
     MAX_WEIGHT: float = MAX_WEIGHT
@@ -114,6 +114,7 @@ class VisualMatcherService:
     AR_DIFF_MAX: float = 0.78
     CHAMFER_DECAY_SCALE: float = 2.85
     _cache: 'OrderedDict[Tuple[Any, ...], Optional[PreparedVisualCrop]]' = OrderedDict()
+    _img_cache: 'OrderedDict[Tuple[Any, ...], str]' = OrderedDict()
     _cache_lock = threading.Lock()
 
     @classmethod
@@ -197,6 +198,7 @@ class VisualMatcherService:
         """Vacía la caché LRU en memoria (útil para tests y tras actualizaciones masivas)."""
         with cls._cache_lock:
             cls._cache.clear()
+            cls._img_cache.clear()
 
     @classmethod
     def tiene_en_cache(cls, cache_key: Tuple[Any, ...]) -> bool:
@@ -225,6 +227,34 @@ class VisualMatcherService:
             cls._cache.move_to_end(cache_key)
             while len(cls._cache) > cls.MAX_CACHE_SIZE:
                 cls._cache.popitem(last=False)
+
+    @classmethod
+    def tiene_imagen_en_cache(cls, cache_key: Tuple[Any, ...]) -> bool:
+        """Verifica si el DataURL de un recorte histórico está en caché en memoria."""
+        with cls._cache_lock:
+            return cache_key in cls._img_cache
+
+    @classmethod
+    def obtener_imagen_en_cache(cls, cache_key: Tuple[Any, ...]) -> Optional[str]:
+        """Obtiene el DataURL de un recorte desde la caché LRU promoviéndolo como reciente."""
+        with cls._cache_lock:
+            if cache_key not in cls._img_cache:
+                return None
+            cls._img_cache.move_to_end(cache_key)
+            return cls._img_cache[cache_key]
+
+    @classmethod
+    def guardar_imagen_en_cache(
+        cls,
+        cache_key: Tuple[Any, ...],
+        data_url: str,
+    ) -> None:
+        """Almacena el DataURL de un recorte histórico respetando MAX_CACHE_SIZE."""
+        with cls._cache_lock:
+            cls._img_cache[cache_key] = data_url or ''
+            cls._img_cache.move_to_end(cache_key)
+            while len(cls._img_cache) > cls.MAX_CACHE_SIZE:
+                cls._img_cache.popitem(last=False)
 
     @staticmethod
     def decodificar_bytes_dataurl(data_url: str) -> bytes:

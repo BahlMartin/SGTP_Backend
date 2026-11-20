@@ -44,6 +44,7 @@ class EscanearRecetaOCRView(APIView):
         firmas_visuales = request.data.get('firmas_visuales')
         recortes_imagen = request.data.get('recortes_imagen')
         usar_vision_ia = bool(request.data.get('usar_vision_ia', False))
+        deduplicar_imagenes = bool(request.data.get('deduplicar_imagenes', False))
         if textos is not None:
             if not isinstance(textos, list):
                 return Response(
@@ -57,6 +58,8 @@ class EscanearRecetaOCRView(APIView):
                 recortes_imagen=recortes_imagen if isinstance(recortes_imagen, list) else None,
                 permitir_vision_ia=usar_vision_ia
             )
+            if deduplicar_imagenes:
+                OCRIntegrationService.deduplicar_imagenes_respuesta(resultado)
             combo = resultado.get('combo_detectado')
             msg_combo = f" [Batería detectada: {combo}]" if combo else ""
 
@@ -80,7 +83,8 @@ class EscanearRecetaOCRView(APIView):
                     "combo_detectado": combo,
                     "sugerencias": resultado['sugerencias'],
                     "renglones": resultado.get('renglones', []),
-                    "sugerencias_contextuales": resultado.get('sugerencias_contextuales', [])
+                    "sugerencias_contextuales": resultado.get('sugerencias_contextuales', []),
+                    "imagenes_recortes": resultado.get('imagenes_recortes', {})
                 },
                 status=status.HTTP_200_OK
             )

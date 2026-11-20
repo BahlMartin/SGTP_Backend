@@ -32,6 +32,11 @@ class RecetaUploadSerializer(serializers.Serializer):
         default=False,
         help_text="Si es True, habilita asistencia automática de Visión IA sobre bloques dudosos."
     )
+    deduplicar_imagenes = serializers.BooleanField(
+        required=False,
+        default=False,
+        help_text="Si es True, deduplica Base64 en `imagenes_recortes` por `recorte_id`."
+    )
 
 
 class OCRScanRequestSerializer(RecetaUploadSerializer):
@@ -103,6 +108,11 @@ class OCRScanResponseSerializer(serializers.Serializer):
     sugerencias = OCRResultadoEstudioSerializer(many=True)
     renglones = OCRRenglonMapeadoSerializer(many=True, required=False)
     sugerencias_contextuales = OCRSugerenciaContextualSerializer(many=True, required=False)
+    imagenes_recortes = serializers.DictField(
+        child=serializers.CharField(allow_blank=True),
+        required=False,
+        default=dict
+    )
 
 
 class RenglonConfirmadoFeedbackSerializer(serializers.Serializer):
